@@ -1,0 +1,57 @@
+{
+  "about": [
+    "Real message *shapes*, collected from public pages (open-source SMS parsers, bank",
+    "help pages, security write-ups). Every identifier in them was already masked by the",
+    "publisher or has been masked here: no account number, name, VPA or reference below",
+    "belongs to a real person.",
+    "",
+    "These exist so a template change is checked against text written by banks, not by us.",
+    "To add your own: paste the message with the digits replaced, put the sender in",
+    "'sender', and let the test tell you what the pipeline does with it. If the pipeline is",
+    "wrong, fix the pipeline - not the expectation."
+  ],
+  "messages": [
+    {
+      "id": "hdfc.upi_debit_avl_bal",
+      "sender": "AD-HDFCBK-T",
+      "body": "Rs.450.00 debited from A/c XX1234 on 28-09-26 to VPA swiggy@icici. UPI Ref 426512345678. Avl Bal Rs.12,340.50 -HDFC Bank",
+      "source": "https://github.com/ShravaniZ26/SMS_Tracker",
+      "expect": {"intent": "expense", "treatment": "expense", "amount": 450.0, "last4": "1234", "merchant": "Swiggy", "balance": 12340.50}
+    },
+    {
+      "id": "hdfc.sent_to_person",
+      "sender": "AD-HDFCBK-T",
+      "body": "Sent Rs.450.00 From HDFC Bank A/C *5678 to Rohan Sharma on 13-10-26 via UPI Ref 928371928371.",
+      "source": "https://github.com/Yashwant-Rangrej/Montra",
+      "expect": {"intent": "expense", "treatment": "expense", "amount": 450.0, "last4": "5678"}
+    },
+    {
+      "id": "hdfc.upi_credit_avl_bal",
+      "sender": "AD-HDFCBK-T",
+      "body": "Rs 99.01 credited to A/c XX1234 on 30-09-26 by UPI Ref No 412345678901. Avl Bal Rs 5,000.00",
+      "source": "https://github.com/ibhub0/Merchant-Bot",
+      "expect": {"intent": "income", "treatment": "income", "amount": 99.01, "last4": "1234"}
+    },
+    {
+      "id": "generic.short_credit",
+      "sender": "AD-HDFCBK-S",
+      "body": "Your a/c XX4821 credited with Rs.12,000 on 14-Jun. Avl bal: Rs.45,320.",
+      "source": "https://www.safeupi.org/",
+      "expect": {"intent": "income", "treatment": "income", "amount": 12000.0, "last4": "4821"}
+    },
+    {
+      "id": "generic.short_debit",
+      "sender": "AD-HDFCBK-S",
+      "body": "Your a/c XX4821 debited Rs.4,500 on 14-Jun for UPI ref 3291847563. Avl bal Rs.18,200.",
+      "source": "https://www.safeupi.org/",
+      "expect": {"intent": "expense", "treatment": "expense", "amount": 4500.0, "last4": "4821", "balance": 18200.0}
+    },
+    {
+      "id": "generic.inr_prefix",
+      "sender": "AD-IDFCFB-S",
+      "body": "INR 1,250.00 debited from A/c XX4532 on 26-Jun-26. UPI Ref: 409876123456. Avl Bal: INR 23,400.50",
+      "source": "https://getfinny.app/blog/best-expense-tracker-apps-india-2026",
+      "expect": {"intent": "expense", "treatment": "expense", "amount": 1250.0, "last4": "4532", "balance": 23400.50}
+    }
+  ]
+}

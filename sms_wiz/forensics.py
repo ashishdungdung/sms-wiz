@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from . import templates
 from .extract import find_urls, is_shortener, is_suspicious_tld, url_domain
 from .models import EntityKind, LinkInfo, SenderInfo
 from .registry import ALIAS_INDEX, DOMAIN_INDEX
@@ -76,6 +77,39 @@ def _official_entity_for_alias(name: str):
     return ALIAS_INDEX.get(name.upper())
 
 
+_IP_HOST = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_BRAND_IN_DOMAIN = re.compile(
+    r"(sbi|hdfc|icici|axis|kotak|pnb|bob|canara|union|yesbank|idfc|indus|paytm|phonepe|"
+    r"gpay|googlepay|amazon|flipkart|myntra|irctc|lic|epfo|uidai|aadhaar|parivahan|echallan)",
+    re.IGNORECASE,
+)
+
+
+def _url_depth_signals(url: str, domain: str) -> list[tuple[float, str]]:
+    """Signals that need the URL's own shape, not just its domain."""
+    signals: list[tuple[float, str]] = []
+    lowered = url.lower()
+    host = domain.split("/")[0]
+
+    if _IP_HOST.match(host):
+        signals.append((0.3, f"link uses a bare IP address ({host})"))
+    if "xn--" in host:
+        signals.append((0.25, f"punycode domain can imitate a familiar name ({host})"))
+    if "@" in lowered.split("//", 1)[-1].split("/")[0]:
+        signals.append((0.2, "link hides its real host behind user-info (user@host)"))
+    if host.count(".") >= 4:
+        signals.append((0.1, f"link nests an unusual number of subdomains ({host})"))
+    if len(host) >= 32:
+        signals.append((0.08, "unusually long domain name"))
+    if lower_tld := lowered.split("//", 1)[-1].split("/")[0]:
+        if lower_tld.count("-") >= 3:
+            signals.append((0.12, "domain is stacked with hyphens"))
+    # A brand inside a domain that the brand does not own: sbi-kyc-verify.online
+    if _BRAND_IN_DOMAIN.search(host) and DOMAIN_INDEX.get(host) is None:
+        signals.append((0.18, f"domain mentions a bank/brand it does not own ({host})"))
+    return signals
+
+
 def analyse(text: str, sender: SenderInfo) -> ForensicReport:
     report = ForensicReport()
     links = find_urls(text)
@@ -115,6 +149,8 @@ def analyse(text: str, sender: SenderInfo) -> ForensicReport:
             report.add(0.15, f"throwaway top-level domain ({domain})")
         if entity is None:
             report.add(0.05, f"link domain {domain} is not a domain we know")
+        for weight, reason in _url_depth_signals(url, domain):
+            report.add(weight, reason)
 
     claimed = _brand_mentions(text)
     report.claimed_brands = claimed
@@ -155,6 +191,12 @@ def analyse(text: str, sender: SenderInfo) -> ForensicReport:
     if links and claimed and not any(link.official_for for link in report.links):
         if sender.entity_kind in {EntityKind.BANK, EntityKind.GOVT}:
             report.add(0.25, "bank/government claim with a link that is not on any official domain")
+
+    # A DLT header that claims a bank, with money language, and none of that
+    # bank's message templates matching: the body is not written by the bank.
+    # Weak on its own (+0.10) because templates lag behind format changes.
+    if sender.entity_kind in {EntityKind.BANK, EntityKind.GOVT} and templates.expected_but_missing(text, sender.raw):
+        report.add(0.1, f"header {sender.raw} claims a known institution but the wording matches none of its templates")
 
     report.score = min(1.0, round(report.score, 3))
     report.suspicious = report.score >= REVIEW_THRESHOLD

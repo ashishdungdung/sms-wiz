@@ -88,6 +88,9 @@ def list_events(
     month: Optional[str] = None,
     needs_review: Optional[bool] = None,
     intent: Optional[str] = None,
+    category: Optional[str] = None,
+    min_amount: Optional[float] = None,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -100,10 +103,16 @@ def list_events(
     if intent:
         clauses.append("intent = ?")
         params.append(intent)
+    if category:
+        clauses.append("category = ?")
+        params.append(category)
+    if min_amount is not None:
+        clauses.append("amount_value >= ?")
+        params.append(min_amount)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
+    params.extend([limit, max(0, offset)])
     rows = conn.execute(
-        f"SELECT * FROM events {where} ORDER BY received_at DESC LIMIT ?", params
+        f"SELECT * FROM events {where} ORDER BY received_at DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     return [_with_language(dict(row)) for row in rows]
 
@@ -122,6 +131,23 @@ def _with_language(row: dict[str, Any]) -> dict[str, Any]:
     row["scripts"] = analysis.get("scripts", [])
     row["multilingual"] = bool(analysis.get("multilingual"))
     return row
+
+
+def find_identical(
+    conn: sqlite3.Connection, sender_raw: str, body: str, day: str
+) -> Optional[dict[str, Any]]:
+    """The same message from the same sender on the same day.
+
+    iOS re-delivers SMS through iCloud sync and provider duplicates; the second
+    copy is the same money. Exact text only — a paraphrase is a different
+    message and goes through the possible-duplicate path instead.
+    """
+    row = conn.execute(
+        "SELECT * FROM events WHERE sender_raw = ? AND body = ? AND substr(received_at, 1, 10) = ?"
+        " AND dedup_status != 'suppressed_duplicate' ORDER BY created_at ASC LIMIT 1",
+        (sender_raw, body, day),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def find_by_reference(conn: sqlite3.Connection, reference: str) -> Optional[dict[str, Any]]:
@@ -322,38 +348,28 @@ def list_alerts(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any
 
 
 def summarise_month(conn: sqlite3.Connection, month: str) -> MonthSummary:
-    rows = conn.execute(
-        "SELECT intent, ledger_treatment, amount_value, category, counts_toward_spend,"
-        " dedup_status, needs_review FROM events WHERE substr(received_at, 1, 7) = ?",
-        (month,),
-    ).fetchall()
+    """Month totals, by the same rules as ``/api/v1/overview``.
 
-    summary = MonthSummary(period=month)
-    for row in rows:
-        if row["dedup_status"] == "suppressed_duplicate":
-            continue
-        summary.event_count += 1
-        if row["needs_review"]:
-            summary.needs_review_count += 1
-        amount = row["amount_value"] or 0.0
-        treatment = row["ledger_treatment"]
-        if row["counts_toward_spend"]:
-            summary.spend_total += amount
-            category = row["category"] or "Uncategorized"
-            summary.by_category[category] = round(summary.by_category.get(category, 0.0) + amount, 2)
-        elif treatment == LedgerTreatment.INCOME.value:
-            summary.income_total += amount
-        elif treatment == LedgerTreatment.REFUND.value:
-            summary.refunds_total += amount
-        elif treatment in MONEY_TREATMENTS:
-            summary.excluded_total += amount
-            summary.excluded_reasons[treatment] = round(summary.excluded_reasons.get(treatment, 0.0) + amount, 2)
+    This used to be its own SQL aggregate filtered on ``received_at``, which
+    meant a message delivered on the 1st about a payment on the 30th landed in
+    a different month than the analytics views. One definition now: the
+    analytics bucket, which prefers the bank's posted date.
+    """
+    from .analytics import month_totals
 
-    summary.spend_total = round(summary.spend_total, 2)
-    summary.income_total = round(summary.income_total, 2)
-    summary.refunds_total = round(summary.refunds_total, 2)
-    summary.excluded_total = round(summary.excluded_total, 2)
-    return summary
+    rows = [dict(row) for row in conn.execute("SELECT * FROM events").fetchall()]
+    totals = month_totals(rows, month).as_dict()
+    return MonthSummary(
+        period=month,
+        spend_total=totals["spend"],
+        income_total=totals["income"],
+        refunds_total=totals["refunds"],
+        excluded_total=totals["excluded"],
+        by_category=totals["by_category"],
+        excluded_reasons=totals["by_treatment"],
+        event_count=totals["events"],
+        needs_review_count=totals["review_count"],
+    )
 
 
 def spend_by_intent(conn: sqlite3.Connection, month: str) -> dict[str, int]:

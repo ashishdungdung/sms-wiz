@@ -44,9 +44,12 @@ class TestIngest:
 
     def test_summary(self, client):
         post_sms(client)
-        summary = client.get("/api/v1/summary", params={"month": "2025-03"}).json()
+        # The message says "on 25-02-25" and was delivered on 1 March. Money
+        # buckets by the bank's date, so this is February's spending.
+        summary = client.get("/api/v1/summary", params={"month": "2025-02"}).json()
         assert summary["spend_total"] == 1450.0
         assert summary["by_category"]["Groceries & Quick Commerce"] == 1450.0
+        assert client.get("/api/v1/summary", params={"month": "2025-03"}).json()["spend_total"] == 0.0
 
     def test_summary_validates_month(self, client):
         assert client.get("/api/v1/summary", params={"month": "March"}).status_code == 422

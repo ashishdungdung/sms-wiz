@@ -145,11 +145,76 @@ pick message → choose ground (unsolicited commercial / fraud / impersonation)
 - Motion: no confetti, no bouncing counters. This is a money tool.
 - Offline: everything except the LLM works with no network.
 
-## 5. What we will not design
+## 5. Ledger and digest design rules
+
+These are the rules a new screen or endpoint must not break. Each one exists
+because the naive version was wrong in a way users notice.
+
+**Money**
+1. **A month is the bank's month.** Bucket by the date in the message ("on
+   25-02-25"), not by the delivery time. A payment made on the 28th and
+   delivered on the 1st is last month's money, and the statement agrees.
+2. **Excluded money says why.** "₹18,450 excluded" is useless; "credit-card bill
+   payment — a transfer between your own accounts" is the whole feature. The API
+   returns `by_treatment`, and every screen must show it.
+3. **A notice is not a payment.** A due amount, a pre-debit, a limit offer and a
+   challan have `treatment: none`: they are never added to spend *or* to
+   excluded, because no rupee moved.
+4. **A card payment from a bank account is one event, not two.** The spend
+   already happened on the card; the settlement is a transfer.
+5. **Own-account moves are transfers.** "to A/c XX7788 (self transfer)" is the
+   user moving their own money, and counting it would inflate spend by 40%.
+
+**Merchants**
+6. **A miss beats a guess.** An unknown payee is labelled "Unknown merchant" and
+   counted under `Uncategorized` — never attached to whatever shop you last
+   paid. The dictionary learns only from text with a word in it, so "XX4092"
+   can never become a merchant key.
+7. **The dictionary is data, and the user wins.** Order is
+   `user > seed > vpa > llm > learned`; curated seeds cannot be deleted through
+   the API, only overridden.
+
+**Recurring money**
+8. **One interval is not a cadence.** Two charges are called monthly only when
+   the amount is identical to the rupee *and* they are 26–35 days apart;
+   otherwise they stay `irregular` and never touch the commitment total.
+9. **Confidence is shown, not hidden.** A series carries 0.25–0.95 and the UI
+   shows a hedge ("looks monthly") below 0.7.
+10. **Two cards, two bills; two accounts, two mandates.** Series keys include
+    the instrument, so two Bajaj EMIs on different accounts do not merge into a
+    fake price rise.
+
+**Interruption**
+11. **Push is for money at risk, and nothing else.** A shortfall, an OTP nobody
+    asked for, a failed payment. Everything else is digest or silent.
+12. **Scams are never a push.** A push trains the user to tap; a line in a weekly
+    digest trains them to check. Quarantined messages stay in the timeline
+    regardless, because a notification is never the only record.
+13. **Quiet hours are quiet.** 22:00–07:00 IST: non-critical items keep their
+    severity but land in the digest. Critical items still push, because a
+    bounce at 2 a.m. is actionable at 2 a.m.
+14. **The digest speaks in counts and plain nouns**: "2 scam messages
+    quarantined, 1 voucher saved, an auto-debit that may bounce". No scores, no
+    percentages, no exclamation marks.
+15. **Dedupe is scoped to the subject.** The same voucher twice in six hours is
+    one notification; two different refunds are two.
+
+**Honesty**
+16. **Unknown senders are named as unknown.** An unregistered DLT code shows as
+    "Unknown biller" rather than borrowing a brand from the body text.
+17. **Every derived number is reproducible from stored rows.** Analytics,
+    subscriptions, cards and digest are pure functions of `store.list_events`;
+    if a screen needs SQL of its own, the month definition has already started to
+    drift.
+
+## 6. What we will not design
 
 - A "block this sender" toggle that implies iOS can block SMS. It cannot; the
   best it can do is Junk-foldering future messages from that header.
 - A bulk-delete button. The app can size the queue; the user clears it in
   Messages.
 - A "trust score" for people. Scores are for senders and links, never contacts.
+- A "budget" that scolds. We report; the user decides.
+- A confidence percentage on a push notification. If it needs a number to be
+  believed, it should not have been a push.
 - Auto-reply to a sender, in any flow, for any reason.

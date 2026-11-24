@@ -51,7 +51,7 @@ dependency, optional home-server sync.
 
 | Area | What it does | Status |
 | --- | --- | --- |
-| Classification engine | 7-rule ordered chain over sender, entity, money verbs, mandates, links | **Built** — 182 pytest tests |
+| Classification engine | 7-rule ordered chain over sender, entity, money verbs, mandates, links | **Built** — 364 pytest tests |
 | Zero-double-count ledger | treatment per intent, RRN/reference dedup, refund matching | **Built** |
 | Spam & phishing forensics | DLT/header checks, domain age heuristics, shorteners, APK links, brand-claim-on-unregistered-sender | **Built** |
 | Multilingual normalisation | 9 Indian digit blocks, currency markers, 50 phrase mappings, script detection | **Built** (see `LANGUAGE.md`) |
@@ -62,6 +62,14 @@ dependency, optional home-server sync.
 | Debit shortfall alerts | compares NACH/AutoPay notice against last known balance | **Built** |
 | OTP intelligence | intent, risk, redaction, never stored in clear | **Built** (risk scoring is deliberately conservative) |
 | Contract harness | generated schema/enums, Swift parity, 9 shared fixtures | **Built** |
+| Per-bank templates | 28 sentence shapes across 12 headers, merged per message, audited | **Built** |
+| Merchant dictionary | 347 seed keys / 317 after normalisation, 19 categories, VPA hints, `user > seed > vpa > llm > learned` | **Built** |
+| Spend analytics | weekly / monthly / UPI / category / top merchant, posted-date buckets | **Built** |
+| Subscription calendar | cadence with confidence, next-due, price changes, monthly commitment | **Built** — one interval is not a cadence |
+| Credit-card ledger | statement ↔ payment reconciliation per card, 6 states, outstanding | **Built** |
+| Notification policy | push / digest / silent per alert kind, quiet hours, 6-hour dedupe | **Built** |
+| Filter rule DSL | `sms-wiz.filter/v1`, validated, compiled to `contracts/filter_rules.json` | **Built** (Python fast path); Swift evaluator **written, not compiled** |
+| Real-message fixtures | redacted Indian bank messages replayed through the pipeline | **Built** (see `tests/fixtures/bank_templates/`) |
 | Swift package + tests | platform-neutral models with parity tests | **Written, not compiled here** (no Swift toolchain in CI sandbox) |
 | SwiftUI app screens | ledger, review queue, vaults, complaint | **Proposed** |
 | Cloudflare edge for the filter endpoint | global uptime for network deferral | **Proposed** — not written |

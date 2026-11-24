@@ -38,12 +38,23 @@ claims otherwise is selling you a feature iOS will not run.
 ```bash
 python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 
-./.venv/bin/python -m sms_wiz.cli demo          # 14 Indian edge cases, end to end
+./.venv/bin/python -m sms_wiz.cli demo          # 33 Indian edge cases, end to end
 ./.venv/bin/python -m sms_wiz.cli serve         # API on http://0.0.0.0:8000  (/docs for OpenAPI)
-./.venv/bin/python -m pytest                    # 182 tests
+./.venv/bin/python -m pytest                    # 364 tests
 
 # or, without remembering any of the above:
 make install && make demo && make verify
+```
+
+Other commands, once you have messages stored:
+
+```bash
+./.venv/bin/python -m sms_wiz.cli analytics --month 2026-11   # spend, weeks, UPI, categories
+./.venv/bin/python -m sms_wiz.cli subscriptions --days 45     # recurring + calendar
+./.venv/bin/python -m sms_wiz.cli cards                       # statement vs payment per card
+./.venv/bin/python -m sms_wiz.cli merchants --q swiggy        # dictionary lookup
+./.venv/bin/python -m sms_wiz.cli digest                      # push vs digest vs silent
+./.venv/bin/python -m sms_wiz.cli rules-check                 # validate the offline rule file
 ```
 
 Classify a single message without a server:
@@ -217,7 +228,14 @@ sms_wiz/
   extract.py     amounts, last4, references, dates, OTPs, URLs, PNRs, merchants
   forensics.py   DLT/sender/link mismatch scoring with named reasons
   classify.py    the ordered rule chain + enrichment
-  merchants.py   self-learning SQLite dictionary (user > seed > learned)
+  catalog.py     the curated merchant dictionary: 347 seed keys (317 unique), 19 categories
+  merchants.py   self-learning SQLite dictionary (user > seed > vpa > llm > learned)
+  templates.py   28 per-bank sentence shapes (template + audit trail)
+  analytics.py   month/week/UPI/category/top-merchant views (one definition of a month)
+  subscriptions.py  cadence, calendar, price changes, monthly commitment
+  cards.py       statement ↔ payment reconciliation per card
+  rules.py       issuer-authored filter DSL + validator + compiled artifact
+  notify.py      push / digest / silent policy, quiet hours, dedupe
   redact.py      PII masking for anything leaving the device
   llm.py         optional OpenAI-compatible enrichment (off by default)
   pipeline.py    dedupe → persist → balances → refunds → vouchers → alerts
@@ -227,9 +245,9 @@ sms_wiz/
 scripts/         export_contracts.py (generate), verify_contracts.py (parity gate)
 contracts/       generated schema + enums, plus fixtures both languages replay
 .agents/skills/  six step-by-step procedures for changes this repo gets
-tests/           182 tests
+tests/           364 tests
 ios/             reference Swift (filter extension, App Intent, models)
-docs/            iOS constraints, schema
+docs/            iOS constraints, schema, filter-rule syntax, fixture guide
 ```
 
 ---
@@ -240,7 +258,13 @@ docs/            iOS constraints, schema
 - [x] Generated contract + shared fixtures + Swift parity check without Xcode.
 - [ ] Share extension + clipboard import in the iOS app (the reliable paths).
 - [ ] Merchant dictionary review UI backed by `GET/POST /api/v1/merchants`.
-- [ ] Subscription calendar from pre-debit notices (detect, then compare).
-- [ ] Lender-authored rule syntax for the filter extension's offline pass.
+- [x] Subscription calendar from pre-debit notices, with conservative cadence.
+- [x] Lender-authored rule syntax for the filter extension's offline pass (12 rules).
+- [x] Merchant dictionary as data: 347 aliases over 317 keys, unknown matches flagged.
+- [x] Per-bank message templates with a real-message fixture corpus.
+- [x] Weekly / monthly / UPI / card-payment analytics with one month definition.
+- [x] Notification policy: what earns a push, what waits for the weekly digest.
+- [ ] Swift `FilterRules.swift` evaluator (spec + compiled JSON exist; not yet compiled).
+- [ ] Share extension + clipboard import inside a real iOS app.
 - [ ] Export to CSV / a single JSON snapshot, so the ledger is never hostage.
 - [ ] More bank templates, with real messages as test fixtures (redacted).

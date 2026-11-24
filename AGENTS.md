@@ -23,7 +23,7 @@ message folders each message belongs in.
 - `ios/` — Swift. Message filter extension, App Intent, models, and a
   platform-neutral `SMSCore` Swift package with real tests.
 - `contracts/` — the language-neutral handshake (generated schema + enums + fixtures).
-- `tests/` — 182 pytest tests. They are the referee; docs are not.
+- `tests/` — 364 pytest tests. They are the referee; docs are not.
 - `.agents/skills/` — repeatable procedures for the changes this repo actually gets.
 
 Read `PROJECT.md` for scope, `ARCHITECTURE.md` for how the parts fit,
@@ -83,7 +83,7 @@ Everything is driven through `make`. The same targets work in any editor.
 
 ```bash
 make install      # create .venv, install with dev extras
-make test         # pytest  (182 tests)
+make test         # pytest  (364 tests)
 make demo         # 14 Indian edge cases through the real pipeline
 make serve        # FastAPI on 0.0.0.0:8000, landing page at /
 make contracts    # regenerate contracts/ from the Python model

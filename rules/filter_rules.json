@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "syntax": "sms-wiz.filter/v1",
+  "notes": [
+    "Authoring file for the message filter's OFFLINE pass.",
+    "Rules here must be answerable from one text message with no network, no",
+    "database and no model: the iOS extension runs them in milliseconds.",
+    "The full Python rule chain still classifies the message when it reaches",
+    "the app; these rules only decide the folder before that happens.",
+    "Allowed: action in [allow, junk, promotion, transaction].",
+    "sub_action must be one the app declares (max 5 transactional, 5 promotional).",
+    "First matching rule wins; order therefore matters, and is preserved as written."
+  ],
+  "rules": [
+    {
+      "id": "security.apk_download",
+      "when": {
+        "any": ["apk", "install app", "download app"],
+        "sender_kinds": ["personal_mobile", "unknown", "shortcode"]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.95,
+        "reason": "asks an unknown sender's link recipient to install an app"
+      }
+    },
+    {
+      "id": "security.kyc_link_from_personal_number",
+      "when": {
+        "all": ["kyc"],
+        "any": ["update", "expire", "suspend", "block"],
+        "sender_kinds": ["personal_mobile", "unknown"],
+        "has_link": true
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.9,
+        "reason": "KYC pressure plus a link from a number no bank uses"
+      }
+    },
+    {
+      "id": "security.lottery_bait",
+      "when": {
+        "any": ["lucky winner", "you have won", "prize of", "crore winner"],
+        "sender_kinds": ["personal_mobile", "unknown", "shortcode"]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.85,
+        "reason": "lottery bait from a non-institutional sender"
+      }
+    },
+    {
+      "id": "otp.never_junk",
+      "when": {
+        "any": ["otp", "one time password", "verification code", "do not share"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.9,
+        "reason": "a code the user may be waiting for must stay visible"
+      }
+    },
+    {
+      "id": "bank.emi_offer",
+      "when": {
+        "sender_prefixes": ["HDFCBK", "ICICIB", "AXISBK", "KOTAKB", "SBIN", "IDFCFB", "YESBK", "INDUS"],
+        "any": ["easy emi", "convert", "pre-approved", "personal loan", "credit limit"],
+        "none": ["debited", "spent", "withdrawn"]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalOffers",
+        "confidence": 0.85,
+        "reason": "lending pitch from a bank with no money movement"
+      }
+    },
+    {
+      "id": "bank.statement_due",
+      "when": {
+        "sender_prefixes": ["HDFCBK", "ICICIB", "AXISBK", "KOTAKB", "SBIN", "SBICRD", "AMEX", "RBLCR"],
+        "all": ["due"],
+        "any": ["total due", "minimum due", "statement"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.85,
+        "reason": "statement with an amount due is a reminder, not a debit"
+      }
+    },
+    {
+      "id": "bank.mandate_notice",
+      "when": {
+        "any": ["will be debited", "will be presented", "e-mandate", "nach mandate", "autopay", "auto pay"],
+        "none": ["debited from", "has been debited"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.8,
+        "reason": "pre-debit notice: something is coming, nothing has moved yet"
+      }
+    },
+    {
+      "id": "travel.irctc_booking",
+      "when": {
+        "sender_prefixes": ["IRCTC", "IRCTCS"],
+        "any": ["pnr", "chart prepared", "booking confirmed", "ticket booked"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalOrders",
+        "confidence": 0.9,
+        "reason": "rail booking confirmation"
+      }
+    },
+    {
+      "id": "delivery.handover_code",
+      "when": {
+        "any": ["out for delivery", "handover code", "arriving today", "delivery code"],
+        "sender_prefixes": ["AMAZON", "FLIPKART", "MYNTRA", "DELHIVERY", "BLUEDART", "EKART", "ZOMATO", "SWIGGY"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalOrders",
+        "confidence": 0.85,
+        "reason": "delivery is in progress"
+      }
+    },
+    {
+      "id": "rewards.voucher_code",
+      "when": {
+        "any": ["voucher code", "gift card", "coupon code", "e-gift"],
+        "none": ["unsubscribe", "shop now", "buy now"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalRewards",
+        "confidence": 0.8,
+        "reason": "a code with monetary value belongs in the vault folder"
+      }
+    },
+    {
+      "id": "govt.challan_notice",
+      "when": {
+        "sender_prefixes": ["VAHAN", "PARIVAHAN", "MORTH", "TRAFFIC", "GOVTIN"],
+        "any": ["challan", "penalty", "notice"]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalPublicServices",
+        "confidence": 0.85,
+        "reason": "government notice"
+      }
+    },
+    {
+      "id": "promo.unsubscribe_bulk",
+      "when": {
+        "any": ["unsubscribe", "t&c apply", "t&c", "% off", "sale ends", "flat off"],
+        "none": ["debited", "credited", "otp", "due"]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalCoupons",
+        "confidence": 0.8,
+        "reason": "bulk marketing with an opt-out line"
+      }
+    }
+  ]
+}

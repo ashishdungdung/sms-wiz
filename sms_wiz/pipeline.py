@@ -85,6 +85,26 @@ class Ingestor:
         reference = event.analysis.get("reference")
         is_money = event.ledger.treatment.value in store.MONEY_TREATMENTS
 
+        if is_money:
+            # Byte-identical re-delivery (iCloud sync, carrier duplicate) is the
+            # cheapest duplicate to catch and the one users hit most often.
+            day = event.received_at.strftime("%Y-%m-%d")
+            same = store.find_identical(conn, event.sender_raw, event.body, day)
+            if same:
+                event.dedup.status = "suppressed_duplicate"
+                event.dedup.duplicate_of = same["event_id"]
+                event.dedup.reason = "identical message from the same sender was already recorded today"
+                event.analysis["duplicate_kind"] = "identical_redelivery"
+                alerts.append(
+                    Alert(
+                        severity="info",
+                        kind="duplicate_suppressed",
+                        message="Identical message delivered twice — the second copy was not counted again.",
+                        data={"duplicate_of": same["event_id"]},
+                    )
+                )
+                return same["event_id"]
+
         if reference and is_money:
             existing = store.find_by_reference(conn, str(reference))
             if existing:

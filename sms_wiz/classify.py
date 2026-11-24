@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from . import extract, forensics
+from . import extract, forensics, templates
 from .merchants import MerchantDictionary
 from .normalize import normalize_text
 from .models import (
@@ -54,6 +54,11 @@ CC_BILL_PATTERNS = (
     r"\bcredited\s+to\s+your\s+(?:credit\s+)?card\b",
     r"\bcard\s+payment\s+(?:received|successful|of|done)\b",
     r"\bpayment\s+(?:successful|done|completed)\b.{0,60}\bcredit\s+card\b",
+    # Paying the card *from* the bank account: "Rs 18,450 debited from A/c
+    # XX4092 to Credit Card XX4433". The debit is real, the spend already
+    # happened on the card, so counting both would double it.
+    r"\b(?:to|towards)\s+(?:your\s+)?(?:credit\s+card|card\s+(?:ending|no\.?|xx)|cc\s*(?:a/c|ac|payment))\b",
+    r"\b(?:cc|card)\s+payment\b",
 )
 
 REFUND_INITIATED_PATTERNS = (
@@ -123,6 +128,16 @@ VOUCHER_REJECT = re.compile(
     r"grab|hurry|limited\s+period|apply\s+now)\b",
     re.IGNORECASE,
 )
+#: "to A/c XX7788 (self transfer)", "to your own account", "self transfer to".
+#: The intent existed from day one but nothing produced it, so an own-account
+#: move was counted as spending.
+SELF_TRANSFER_PATTERNS = (
+    r"\bself\s+transfer\b",
+    r"\bto\s+(?:your\s+)?own\s+(?:a/c|account|ac)\b",
+    r"\btransfer\s+within\s+(?:your\s+)?(?:own\s+)?accounts?\b",
+    r"\bbetween\s+your\s+(?:own\s+)?accounts?\b",
+)
+
 INVESTMENT_PATTERNS = (
     r"\b(?:sip|systematic\s+investment|mutual\s+fund)\b",
     r"\b(?:units?\s+(?:allotted|purchased|credited)|nav\s+of|folio)\b",
@@ -334,6 +349,11 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
     if invest and (amount or re.search(r"\b(?:units?|nav|folio|allotment)\b", lower)):
         evidence.append(f"investment language ({invest.strip()})")
         return Intent.INVESTMENT, 0.75, evidence, flags
+    if amount and re.search(r"\b(?:fund\s*transfer|money\s+added|add\s+money)\b", lower) and re.search(
+        r"\b(?:zerodha|groww|upstox|angel\s*one|indmoney|kuvera|coin|mutual\s+fund|sip)\b", lower
+    ):
+        evidence.append("broker/scheme transfer language")
+        return Intent.INVESTMENT, 0.72, evidence, flags
 
     # 10. Pre-debit notices / mandates ------------------------------------
     upcoming = _any(UPCOMING_DEBIT_PATTERNS, lower)
@@ -343,7 +363,10 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
 
     # 11. Bill due ---------------------------------------------------------
     bill = _any(BILL_DUE_PATTERNS, lower)
-    if bill and (amount or ctx.total_due or ctx.minimum_due):
+    # "Rs 3,499 spent at CROMA … Total due Rs 12,480" is a spend with a running
+    # balance, not a bill. A movement verb outranks the due line.
+    spend_sentence = DEBIT_VERBS.search(lower) and not re.search(r"\b(?:card|bill)\s+payment\b", lower)
+    if bill and (amount or ctx.total_due or ctx.minimum_due) and not spend_sentence:
         evidence.append(f"bill/statement due language ({bill.strip()})")
         return Intent.BILL_DUE, 0.78, evidence, flags
 
@@ -384,9 +407,21 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
             ["bank_marketing"] if bank_like else [],
         )
 
+    # 13.7 Own-account moves ------------------------------------------------
+    # A transfer between the user's own accounts is not spending; it is the same
+    # rupee changing pocket. Checked before the generic debit rule.
+    self_move = _any(SELF_TRANSFER_PATTERNS, lower)
+    self_verb = DEBIT_VERBS.search(ctx.text)
+    if self_move and self_verb:
+        evidence.append(f"own-account transfer ({self_move.strip()}) with '{self_verb.group(0)}'")
+        return Intent.SELF_TRANSFER, 0.85, evidence, flags
+
     # 14. Real money movement ---------------------------------------------
     debit = DEBIT_VERBS.search(ctx.text)
-    credit = CREDIT_VERBS.search(ctx.text)
+    # "Credit Card" and "credit limit" are nouns, not credits. Matching them as
+    # a credit verb made every card payment read as ambiguous.
+    credit_text = re.sub(r"credit\s+(?:card|limit)", " ", ctx.text, flags=re.IGNORECASE)
+    credit = CREDIT_VERBS.search(credit_text)
     if amount:
         if debit and not credit:
             evidence.append(f"debit verb '{debit.group(0)}' with amount")
@@ -478,6 +513,21 @@ def _otp_purpose(lower: str) -> tuple[str, str]:
     return "unknown", "low"
 
 
+#: Intents where a message date means "this happened on", not "this is due on".
+_MOVEMENT_INTENTS = {
+    Intent.EXPENSE,
+    Intent.INCOME,
+    Intent.SELF_TRANSFER,
+    Intent.CC_BILL_PAYMENT,
+    Intent.REFUND_CREDITED,
+    Intent.REFUND_INITIATED,
+    Intent.CASH_WITHDRAWAL,
+    Intent.INSTRUMENT_LOAD,
+    Intent.INVESTMENT,
+    Intent.FASTAG_TOLL,
+}
+
+
 def _summary(intent: Intent, amount: Optional[float], merchant: Optional[Merchant], institution: Optional[Institution], extra: str = "") -> str:
     who = (merchant.clean if merchant and merchant.clean else None) or (institution.name if institution else None) or ""
     if intent == Intent.EXPENSE:
@@ -542,6 +592,16 @@ def analyse(
     sender = extract.parse_sender(sender_raw)
     ctx = _build_context(text, sender, now)
 
+    # Bank-specific templates fill gaps the generic extractors leave (and audit
+    # which sentence shape was recognised).
+    template_hit = templates.match(text, sender_raw)
+    if template_hit is not None:
+        if ctx.balance is None and template_hit.balance is not None:
+            ctx.balance = template_hit.balance
+        evidence_hint = f"matched {template_hit.bank} template {template_hit.template_id}"
+    else:
+        evidence_hint = None
+
     intent, score, evidence, flags = _decide(ctx)
 
     # An upsell inside a real transaction is not a separate event. Keep the
@@ -556,20 +616,21 @@ def analyse(
         score = min(score, 0.55)
 
     institution = _detect_institution(text, sender)
-    if institution and ctx.last4:
-        digit_only = ctx.last4
+    last4 = ctx.last4 or (template_hit.last4 if template_hit else None)
+    if institution and last4:
+        digit_only = last4
         if re.search(r"\bcard\b", ctx.lower):
             institution.card_last4 = digit_only
         else:
             institution.account_last4 = digit_only
 
-    merchant_raw = extract.find_merchant_raw(text)
+    merchant_raw = extract.find_merchant_raw(text) or (template_hit.merchant if template_hit else None)
     merchant: Optional[Merchant] = None
     if merchants is not None:
-        match = merchants.lookup(merchant_raw or "") or merchants.lookup(text)
+        match = merchants.resolve(merchant_raw or "") or merchants.resolve(text)
         if match:
             merchant = Merchant(raw=merchant_raw or match.raw, clean=match.clean, category=match.category, source=match.source, confidence=match.score)
-            if merchant_raw:
+            if merchant_raw and re.search(r"[A-Za-z]{3}", merchant_raw):
                 merchants.learn(merchant_raw, match.clean, match.category, source="learned")
     if merchant is None and merchant_raw:
         merchant = Merchant(raw=merchant_raw, source="none", confidence=0.3)
@@ -577,7 +638,17 @@ def analyse(
 
     amount_hit = ctx.amount
     amount = None
-    if amount_hit:
+    if amount_hit is None and template_hit is not None and template_hit.amount is not None:
+        # The bank's own template found an amount the generic patterns missed.
+        direction = "credit" if template_hit.kind == "credit" else "debit"
+        amount = Amount(
+            value=template_hit.amount,
+            currency="INR",
+            raw=str(template_hit.fields.get("amount", "")),
+            direction=direction,  # type: ignore[arg-type]
+            balance_after=ctx.balance,
+        )
+    elif amount_hit:
         direction = amount_hit.direction
         if intent == Intent.INCOME or intent == Intent.REFUND_CREDITED:
             direction = "credit"
@@ -591,6 +662,9 @@ def analyse(
             balance_after=ctx.balance,
             credit_limit_after=ctx.credit_limit,
         )
+
+    if evidence_hint:
+        evidence.append(evidence_hint)
 
     event = SmsEvent(
         received_at=now,
@@ -728,6 +802,7 @@ def analyse(
         "digit_scripts": normalised.digit_scripts,
         "translations": normalised.translations,
         "multilingual": normalised.is_multilingual,
+        "template": template_hit.as_dict() if template_hit is not None else None,
         "rail": _rail(ctx.lower),
         "reference": ctx.reference,
         "upi_rrn": ctx.rrn,
@@ -762,4 +837,13 @@ def analyse(
     )
     event.redacted_body = redaction.text
     event.analysis["redaction"] = redaction.replaced
+
+    # The bank's own date, not the delivery time. A message that arrives after
+    # midnight ("... on 28-02-25") belongs to February, and weekly/monthly
+    # totals must agree with the statement. Only movement intents get one:
+    # a bill's due date is not the day it was paid.
+    if intent in _MOVEMENT_INTENTS and ctx.dates:
+        past = [hit.value for hit in ctx.dates if hit.value.date() <= now.date()]
+        if past:
+            event.analysis["posted_on"] = max(past).date().isoformat()
     return event

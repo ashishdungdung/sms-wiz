@@ -98,7 +98,11 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 
 def connect(path: str | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(path or DEFAULT_DB_PATH, timeout=10)
+    target = Path(path or DEFAULT_DB_PATH)
+    # A first run must not fail with "unable to open database file" just
+    # because ~/.sms_wiz does not exist yet.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(target), timeout=10)
     conn.row_factory = sqlite3.Row
     init(conn)
     return conn

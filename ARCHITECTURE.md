@@ -27,6 +27,12 @@
   │   POST /api/v1/ingest-sms → full SmsEvent + alerts                 │
   │   GET  /api/v1/summary    → month buckets, zero-double-count view  │
   │   GET  /api/v1/vouchers · /refunds · /cleanup-queues · /review     │
+  │   GET  /api/v1/overview   → month + weeks + trend + UPI + cards    │
+  │   GET  /api/v1/analytics/{weekly,monthly,upi}                      │
+  │   GET  /api/v1/subscriptions[/calendar] · /cards                   │
+  │   GET  /api/v1/notifications · /digest                             │
+  │   GET  /api/v1/merchants/stats · /templates · /rules               │
+  │   POST /api/v1/rules/evaluate · /filter/explain (token-guarded)    │
   └───────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -46,8 +52,21 @@
    dates, PNR)       brand claims)
         │
         ▼
-  registry.py  (≈120 Indian entities, DLT prefixes, domains, categories, routing)
+  registry.py  (≈180 Indian entities, DLT prefixes, domains, categories, routing)
+
+  Derived views — pure functions over stored rows, no second source of truth
+  ─────────────────────────────────────────────────────────────────────────
+  analytics.py       month / ISO week / UPI / category / top merchant
+  subscriptions.py   cadence + confidence, calendar, price changes
+  cards.py           statement ↔ payment, outstanding, six states
+  notify.py          push / digest / silent, quiet hours, dedupe, digest text
 ```
+
+**One definition of a month.** `analytics.received()` prefers the date inside the
+message (`analysis.posted_on`) over the delivery timestamp, so a payment made on
+the 28th and delivered on the 1st stays in the month the statement puts it in.
+`store.summarise_month` delegates to the same function; the CLI, `/summary` and
+`/overview` therefore cannot disagree.
 
 ## Layering rule
 
@@ -166,6 +185,11 @@ over every other source on the next identical message.
 | a category mapping | `ROUTING` / `effective_subaction()` | ≤5 declared per group |
 | an API field | `models.py` → `make contracts` → mirror Swift | `make verify` |
 | an LLM provider | `llm.py` `Provider` list | still redacted-only, never on filter |
+| a bank's message shape | `templates.py` | one fixture per shape; merged, never guessed |
+| a merchant | `catalog.py` | unique key, known category slug, longest key wins |
+| an offline filter rule | `rules/filter_rules.json` | validator: declared sub-action, junk needs a danger signal |
+| an alert kind | `notify.ALERT_POLICY` + pipeline | default is digest, never a silent drop |
+| an analytics view | `analytics.py` | same bucket function as every other view |
 
 ## Deployment shapes
 

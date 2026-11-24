@@ -23,6 +23,7 @@ CONTRACTS = ROOT / "contracts"
 
 sys.path.insert(0, str(ROOT))
 
+from sms_wiz import rules as filter_rules  # noqa: E402
 from sms_wiz.models import (  # noqa: E402
     AppleAction,
     AppleSubAction,
@@ -59,6 +60,11 @@ def build() -> dict[Path, str]:
     return {
         CONTRACTS / "sms_event.schema.json": json.dumps(schema, indent=2, sort_keys=True) + "\n",
         CONTRACTS / "enums.json": json.dumps(enums, indent=2, sort_keys=True) + "\n",
+        # Compiled from rules/filter_rules.json; shipped to the iOS extension.
+        CONTRACTS / "filter_rules.json": json.dumps(
+            filter_rules.compiled(), indent=2, sort_keys=True, ensure_ascii=False
+        )
+        + "\n",
     }
 
 

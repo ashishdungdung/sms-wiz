@@ -279,7 +279,13 @@ class Ledger(BaseModel):
         rules: dict[Intent, tuple[LedgerTreatment, bool, bool, bool, str]] = {
             Intent.EXPENSE: (LedgerTreatment.EXPENSE, True, False, False, "real outflow"),
             Intent.FASTAG_TOLL: (LedgerTreatment.EXPENSE, True, False, False, "toll is real spend"),
-            Intent.GOVT_NOTICE: (LedgerTreatment.EXPENSE, False, False, False, "govt notice: only counted when a payment is confirmed"),
+            Intent.GOVT_NOTICE: (
+                LedgerTreatment.NONE,
+                False,
+                False,
+                False,
+                "govt notice: a demand, not a payment; counted only when the payment itself arrives",
+            ),
             Intent.INCOME: (LedgerTreatment.INCOME, False, True, False, "money received"),
             Intent.REFUND_CREDITED: (LedgerTreatment.REFUND, False, False, True, "refund reduces earlier spend"),
             Intent.CC_BILL_PAYMENT: (
