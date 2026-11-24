@@ -409,12 +409,24 @@ _BARE_CODE_RE = re.compile(r"\bcode\s*(?:is|:)?\s*([A-Z0-9]{5,16}[-][A-Z0-9]{2,8
 _PIN_RE = re.compile(r"\bpin(?:\s*code)?\s*(?:is|:)?\s*(\d{4,6})\b", re.IGNORECASE)
 
 
+_PLAIN_CODE_RE = re.compile(r"\bcode\s*(?:is|:)?\s*([A-Z0-9]{6,16})\b", re.IGNORECASE)
+_VOUCHER_CONTEXT = re.compile(r"\b(?:voucher|gift\s*card|e-?gift|coupon)\b", re.IGNORECASE)
+
+
 def find_voucher_code(text: str) -> Optional[str]:
     for regex in (_VOUCHER_CODE_RE, _BARE_CODE_RE):
         match = regex.search(text)
         if match:
             candidate = match.group(1).strip("-")
             if any(ch.isdigit() for ch in candidate) and len(candidate) >= 6:
+                return candidate
+    # A plain code ("Code: SWG150X") is only a voucher when the message says so;
+    # otherwise "code 123456" would be read as an OTP and stored in the vault.
+    if _VOUCHER_CONTEXT.search(text):
+        match = _PLAIN_CODE_RE.search(text)
+        if match:
+            candidate = match.group(1).strip("-")
+            if any(ch.isdigit() for ch in candidate):
                 return candidate
     return None
 

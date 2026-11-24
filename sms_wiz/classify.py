@@ -99,7 +99,22 @@ BILL_DUE_PATTERNS = (
     r"\b(?:total|minimum)\s+(?:amount\s+)?due\b",
     r"\bdue\s+date\b",
     r"\bpayment\s+due\b",
+    # LIC / insurance renewals: "Premium of Rs 15,340 is due on 28-03-25".
+    # The `due` requirement keeps "premium debited from a/c" in the ledger.
+    r"\bpremium\b.{0,50}\b(?:due|payable)\b",
 )
+
+#: Words that prove money actually moved. An offer can mention "credit" or
+#: "limit" without any of these; a real transaction almost always has one.
+STRONG_MOVEMENT = re.compile(
+    r"\b(?:debited|credited|withdrawn|withdrawal|spent|received|deposited|"
+    r"transferred|refunded|reversed)\b",
+    re.IGNORECASE,
+)
+
+#: Telecom recharge confirmations have no debit verb: "Recharge of Rs 349
+#: successful". FASTag/wallet/UPI-Lite loads are matched earlier as loads.
+_RECHARGE_DONE = re.compile(r"\b(?:successful|success|completed|done|recharged)\b", re.IGNORECASE)
 VOUCHER_PATTERNS = (
     r"\b(?:voucher|gift\s*card|e-?gift|coupon)\b",
 )
@@ -345,6 +360,30 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
         evidence.append(f"government/utility language ({gov.strip()})")
         return Intent.GOVT_NOTICE, 0.72, evidence, flags
 
+    # 13.5 Telecom recharge ------------------------------------------------
+    if (
+        amount
+        and (re.search(r"\brecharge\b|\btop\s*-?\s*up\b", lower))
+        and _RECHARGE_DONE.search(lower)
+        and not re.search(r"\b(?:fastag|wallet|upi\s*lite)\b", lower)
+    ):
+        evidence.append("telecom recharge confirmation")
+        return Intent.EXPENSE, 0.78, evidence, flags
+
+    # 13.6 Offers that talk about credit without moving money --------------
+    # "Get a credit limit upgrade up to Rs 5,00,000 ... Apply now!" contains the
+    # word "credit". It must never become income.
+    upsell = _any(UPSELL_PATTERNS, lower)
+    if upsell and not STRONG_MOVEMENT.search(lower):
+        bank_like = ctx.sender.entity_kind in {EntityKind.BANK, EntityKind.FINTECH}
+        evidence.append(f"lending/limit language ({upsell.strip()}) with no money movement")
+        return (
+            Intent.BANK_UPSELL if bank_like else Intent.COMMERCIAL_PROMO,
+            0.8 if bank_like else 0.7,
+            evidence,
+            ["bank_marketing"] if bank_like else [],
+        )
+
     # 14. Real money movement ---------------------------------------------
     debit = DEBIT_VERBS.search(ctx.text)
     credit = CREDIT_VERBS.search(ctx.text)
@@ -362,8 +401,7 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
             evidence.append("both debit and credit verbs; amount context reads as debit")
             return Intent.EXPENSE, 0.65, evidence, ["ambiguous_direction"]
 
-    # 15. Bank upsell vs ordinary marketing -------------------------------
-    upsell = _any(UPSELL_PATTERNS, lower)
+    # 15. Bank upsell that also mentions a movement verb ------------------
     if upsell:
         bank_like = ctx.sender.entity_kind in {EntityKind.BANK, EntityKind.FINTECH}
         evidence.append(f"lending/upsell language ({upsell.strip()}) with no money movement")

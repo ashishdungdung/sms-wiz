@@ -96,6 +96,12 @@ Current status — honest:
 right; the phrase list is shorter than Hindi's, so odd phrasings will fall to
 `needs_review` rather than be guessed. That is intended.
 
+Known gaps, measured rather than guessed: a Tamil refund promise
+("திரும்ப செலுத்தப்படும்") still lands in `needs_review` because only the
+debit/credit/balance verbs are mapped. The correct behaviour today is
+"unknown + review", not a confident wrong answer — but refund vocabulary per
+script is the next real language task.
+
 ### Adding a language (the whole checklist)
 
 1. Add the digit block to `INDIC_DIGIT_BLOCKS` (if not already there).

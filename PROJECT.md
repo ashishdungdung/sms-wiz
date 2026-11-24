@@ -51,7 +51,7 @@ dependency, optional home-server sync.
 
 | Area | What it does | Status |
 | --- | --- | --- |
-| Classification engine | 7-rule ordered chain over sender, entity, money verbs, mandates, links | **Built** — 173 pytest tests |
+| Classification engine | 7-rule ordered chain over sender, entity, money verbs, mandates, links | **Built** — 182 pytest tests |
 | Zero-double-count ledger | treatment per intent, RRN/reference dedup, refund matching | **Built** |
 | Spam & phishing forensics | DLT/header checks, domain age heuristics, shorteners, APK links, brand-claim-on-unregistered-sender | **Built** |
 | Multilingual normalisation | 9 Indian digit blocks, currency markers, 50 phrase mappings, script detection | **Built** (see `LANGUAGE.md`) |

@@ -40,7 +40,7 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 
 ./.venv/bin/python -m sms_wiz.cli demo          # 14 Indian edge cases, end to end
 ./.venv/bin/python -m sms_wiz.cli serve         # API on http://0.0.0.0:8000  (/docs for OpenAPI)
-./.venv/bin/python -m pytest                    # 173 tests
+./.venv/bin/python -m pytest                    # 182 tests
 
 # or, without remembering any of the above:
 make install && make demo && make verify
@@ -227,7 +227,7 @@ sms_wiz/
 scripts/         export_contracts.py (generate), verify_contracts.py (parity gate)
 contracts/       generated schema + enums, plus fixtures both languages replay
 .agents/skills/  six step-by-step procedures for changes this repo gets
-tests/           173 tests
+tests/           182 tests
 ios/             reference Swift (filter extension, App Intent, models)
 docs/            iOS constraints, schema
 ```

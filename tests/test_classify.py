@@ -291,3 +291,112 @@ class TestUncertainty:
         event = classify("482910 is your OTP for a txn of Rs 14,500 at MakeMyTrip.", "AD-HDFCBK-S", merchants)
         assert "482910" not in event.summary
         assert "482910" not in event.redacted_body
+
+
+class TestUnseenMessageProbe:
+    """Cases found by classifying messages the suite had never seen.
+
+    Each of these was a real miss: a limit offer counted as income, a premium
+    notice nobody recognised, a recharge nobody recognised, a voucher code that
+    was never extracted. They are pinned here so the fixes cannot regress.
+    """
+
+    def test_credit_limit_offer_is_not_income(self, merchants):
+        event = classify(
+            "Get a credit limit upgrade up to Rs 5,00,000 on your Axis Bank Card "
+            "XX9911. Apply now!",
+            "AD-AXISBK-S",
+            merchants,
+        )
+        assert event.intent is Intent.BANK_UPSELL
+        assert event.ledger.counts_toward_spend is False
+        assert event.ledger.counts_as_income is False
+        assert event.routing.apple_action is AppleAction.PROMOTION
+        assert "bank_marketing" in event.flags
+
+    def test_limit_offer_never_enters_income_totals(self, ingestor, db_path):
+        from sms_wiz import store
+        from sms_wiz.db import connect
+        from sms_wiz.models import IngestRequest
+
+        ingestor.ingest(
+            IngestRequest(
+                sender="AD-AXISBK-S",
+                body="Avail credit limit increase to Rs 5,00,000 on your card. Apply now.",
+                received_at=NOW,
+            )
+        )
+        conn = connect(db_path)
+        try:
+            summary = store.summarise_month(conn, "2025-03")
+        finally:
+            conn.close()
+        assert summary.income_total == 0
+        assert summary.spend_total == 0
+
+    def test_insurance_premium_due_is_a_bill(self, merchants):
+        event = classify(
+            "LIC Policy 887766: Premium of Rs 15,340 is due on 28-03-25. "
+            "Pay now to avoid lapse.",
+            "AD-LICIND-S",
+            merchants,
+        )
+        assert event.intent is Intent.BILL_DUE
+        assert event.amount.value == pytest.approx(15340.0)
+        assert event.ledger.counts_toward_spend is False
+
+    def test_premium_debit_is_still_an_expense(self, merchants):
+        # The `due` requirement in the bill rule keeps a paid premium in the ledger.
+        event = classify(
+            "Rs 15,340 debited from A/c XX4092 towards LIC premium. Avl Bal: Rs 20,000.",
+            "AD-HDFCBK-T",
+            merchants,
+        )
+        assert event.intent is Intent.EXPENSE
+        assert event.ledger.counts_toward_spend is True
+
+    def test_telecom_recharge_is_spend(self, merchants):
+        event = classify(
+            "Recharge of Rs 349 successful for 9876543210. Validity 28 days.",
+            "AD-JIO-S",
+            merchants,
+        )
+        assert event.intent is Intent.EXPENSE
+        assert event.ledger.counts_toward_spend is True
+        assert event.amount.value == pytest.approx(349.0)
+
+    def test_fastag_recharge_is_still_a_load(self, merchants):
+        # The recharge rule must not swallow instrument loads.
+        event = classify(
+            "FASTag recharge of Rs 500 successful on your HDFC FASTag. Balance Rs 720.",
+            "AD-HDFCBK-T",
+            merchants,
+        )
+        assert event.intent is Intent.INSTRUMENT_LOAD
+        assert event.ledger.counts_toward_spend is False
+
+    def test_voucher_with_plain_code_is_saved(self, merchants):
+        event = classify(
+            "You've earned a Rs 150 Swiggy voucher. Code: SWG150X. Valid till 31-03-2025.",
+            "AD-SWIGGY-S",
+            merchants,
+        )
+        assert event.intent is Intent.VOUCHER_ISSUED
+        assert event.voucher is not None and event.voucher.code == "SWG150X"
+        assert event.routing.apple_subaction is AppleSubAction.TRANSACTIONAL_REWARDS
+
+    def test_otp_code_is_not_mistaken_for_a_voucher(self, merchants):
+        event = classify("Your OTP code 482917. Do not share it.", "VM-SBIN-T", merchants)
+        assert event.intent is Intent.OTP
+        assert event.voucher is None
+
+    def test_real_debit_with_pitch_is_still_one_expense(self, merchants):
+        # Guard for the new "no strong movement verb" upsell rule.
+        event = classify(
+            "Rs.1,450.00 debited from A/c XX4092 to VPA KIRANAKART@axisbank "
+            "(UPI Ref 505612345678). Convert this spend into EasyEMI! bit.ly/hdfcemi",
+            "AD-HDFCBK-T",
+            merchants,
+        )
+        assert event.intent is Intent.EXPENSE
+        assert "embedded_upsell" in event.flags
