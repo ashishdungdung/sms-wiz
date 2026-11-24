@@ -207,3 +207,85 @@ class TestValidator:
             encoding="utf-8",
         )
         assert rules.validate_file(copy) == []
+
+
+class TestIndianScamCorpus:
+    """Messages that Indian users actually receive, and what the filter owes them.
+
+    Every junk expectation names a danger signal: the file refuses to ship a rule
+    that junks on "offer" alone, so these are scripts, not marketing.
+    """
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "This is CBI. A courier in your name contained narcotics. Call now to avoid digital arrest.",
+            "Your account will be blocked today. Update KYC at http://hdfc-kyc.online",
+            "Dear customer, share your OTP to reactivate your debit card.",
+            "Your parcel is held at customs duty clearance. Pay at http://bit.ly/3xYz",
+            "Congratulations! You are the lucky winner of Rs 25,00,000. Send your bank details.",
+            "Join our Telegram group for sure shot stock tips and guaranteed returns.",
+            "Job offer: pay a registration fee of Rs 999 to confirm your joining date.",
+        ],
+    )
+    def test_dangerous_scripts_go_to_junk(self, body):
+        verdict = rules.evaluate("9876543210", body, sender_kind="personal_mobile")
+        assert verdict is not None, body
+        assert verdict.action is AppleAction.JUNK, f"{body} -> {verdict.action}"
+        assert verdict.sub_action is AppleSubAction.NONE
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "Rs.1,450.00 debited from A/c XX4092 to VPA SWIGGY@icici on 13-10-26",
+            "Rs.85,000.00 credited to A/c XX4092 by NEFT CR ACME PVT LTD salary",
+        ],
+    )
+    def test_plain_money_messages_are_left_in_the_inbox(self, body):
+        # `allow` is the correct answer: iOS keeps it visible and the app
+        # classifies it on ingest. Only messages that would otherwise be buried
+        # are re-foldered.
+        assert rules.evaluate("AD-HDFCBK-T", body, sender_kind="bank") is None
+
+    @pytest.mark.parametrize(
+        "body,sub_action",
+        [
+            ("Your OTP for a Rs 15,000 transfer is 482913. Valid 10 minutes.", "transactionalReminders"),
+            ("Your postpaid bill of Rs 799 is due on 05-04-26.", "transactionalReminders"),
+            ("Your parcel is out for delivery. Handover code 4821.", "transactionalOrders"),
+            ("Your order for 3 shares of TCS executed at Rs 3900 on NSE.", "transactionalOrders"),
+            ("Your order for 10 shares of INFY executed at Rs 1450.00 on NSE.", "transactionalOrders"),
+            ("Recharge successful. Rs 299 recharged with 2GB/day.", "transactionalFinance"),
+            ("Payment of Rs 18,450 towards your Credit Card has been received.", "transactionalFinance"),
+        ],
+    )
+    def test_transaction_rules_use_declared_sub_actions(self, body, sub_action):
+        verdict = rules.evaluate("AD-ICICIB-S", body, sender_kind="bank")
+        assert verdict is not None, body
+        assert verdict.action is AppleAction.TRANSACTION
+        assert verdict.sub_action.value == sub_action
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "Convert your purchase to Easy EMI at 0% interest. Pre-approved for you.",
+            "Personal loan of Rs 5,00,000 approved. Apply in 2 minutes.",
+            "Insurance policy with cover of Rs 10 lakh. Premium starting at Rs 15/day.",
+            "Mega sale ends tonight. Flat 60% off. Shop now. T&C apply.",
+        ],
+    )
+    def test_marketing_is_promotion_not_junk(self, body):
+        verdict = rules.evaluate("AD-HDFCBK-T", body, sender_kind="bank")
+        assert verdict is not None, body
+        assert verdict.action is AppleAction.PROMOTION, f"{body} -> {verdict.action}"
+
+    def test_a_real_debit_with_an_offer_is_still_allow(self):
+        # The offer is noise; the message is money. The offline pass leaves it and
+        # the app decides, so an offer cannot hide a debit.
+        assert rules.evaluate("AD-HDFCBK-T", "Rs.500 debited. Get 5% cashback on your next order.", sender_kind="bank") is None
+
+    def test_junk_requires_a_danger_signal_and_the_file_has_many_rules(self):
+        assert len(rules.load()) >= 30
+        stats = rules.stats()
+        assert stats["by_action"]["junk"] >= 8
+        assert stats["by_action"]["transaction"] >= 12

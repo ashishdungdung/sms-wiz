@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from . import extract, forensics, templates
+from . import catalog, extract, forensics, templates
 from .merchants import MerchantDictionary
 from .normalize import normalize_text
 from .models import (
@@ -35,11 +35,12 @@ from .models import (
     Routing,
     SenderInfo,
     SmsEvent,
+    TradeInfo,
     VoucherInfo,
     utcnow,
 )
 from .redact import redact
-from .registry import ALIAS_INDEX, ROUTING, effective_subaction
+from .registry import ALIAS_INDEX, ROUTING, EntityKind, effective_subaction
 
 # --------------------------------------------------------------------------
 # Pattern banks
@@ -93,6 +94,60 @@ LOGISTICS_PATTERNS = (
     r"\b(?:pnr|coach|berth|boarding|train\s+no|flight\s+no)\b",
     r"\b(?:awb|docket)\b",
 )
+#: Travel is a *booking record*. The money arrives as its own bank debit, so a
+#: ticket must never be counted a second time — it carries an itinerary instead.
+TRAVEL_PATTERNS = (
+    r"\b(?:pnr|coach|berth|boarding\s+pass|e-?ticket|web\s+ticket)\b",
+    r"\b(?:train|railway|irctc)\b.{0,40}\b(?:booked|confirmed|ticket|journey)\b",
+    r"\b(?:bus|flight|airlines?|airways)\b.{0,40}\b(?:booked|confirmed|ticket|departure)\b",
+    r"\b(?:hotel|resort)\b.{0,40}\b(?:booking|reservation|check-?in)\b",
+    r"\b(?:departure|arrival)\s*(?:time|at)?\b.{0,20}\d{1,2}[:.]\d{2}",
+)
+TRAVEL_MODE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("train", r"\b(?:train|irctc|railway|coach|berth|sleeper|chair\s+car)\b"),
+    ("bus", r"\b(?:bus|volvo|sleeper\s+bus|redbus|abhibus|bus\s+ticket)\b"),
+    ("flight", r"\b(?:flight|airline|airways|boarding|terminal|gate|indigo|air\s+india|vistara|spicejet|akasa)\b"),
+    ("hotel", r"\b(?:hotel|resort|stay|check-?in|check-?out|room)\b"),
+)
+TRAVEL_PROVIDERS: tuple[tuple[str, str], ...] = (
+    ("IRCTC", r"\birctc\b|indian\s+railway"),
+    ("RedBus", r"\bredbus\b"),
+    ("AbhiBus", r"\babhibus\b"),
+    ("ixigo", r"\bixigo\b"),
+    ("MakeMyTrip", r"\bmakemytrip\b|\bmmt\b"),
+    ("Goibibo", r"\bgoibibo\b"),
+    ("Cleartrip", r"\bcleartrip\b"),
+    ("IndiGo", r"\bindigo\b|\b6e\b"),
+    ("Air India", r"\bair\s+india\b"),
+    ("Vistara", r"\bvistara\b"),
+    ("SpiceJet", r"\bspicejet\b"),
+    ("Akasa Air", r"\bakasa\b"),
+    ("OYO", r"\boyo\b"),
+)
+TRADE_PATTERNS = (
+    r"\b(?:bought|sold|purchased)\b.{0,60}\b(?:shares?|units?|qty)\b",
+    r"\border\b.{0,40}\b(?:executed|placed|confirmed)\b",
+    r"\b(?:trade|contract)\s+(?:confirmation|note)\b",
+    r"\bdelivery\s+(?:instruction|obligation)\b",
+    r"\b(?:units?|shares?)\b.{0,40}\ballotted\b",
+    r"\ballotted\s+(?:to\s+)?(?:your\s+)?folio\b",
+    r"\bfolio\b.{0,40}\b(?:units?|nav)\b",
+)
+DIVIDEND_PATTERNS = (
+    r"\bdividend\b",
+    r"\binterest\s+(?:payout|credited)\b.{0,40}\b(?:debenture|bond|ncd)\b",
+)
+IPO_PATTERNS = (
+    r"\b(?:asba|ipo)\b.{0,60}\b(?:allot|allotted|allotment|blocked|applied|application|refund|unblock)\b",
+    r"\b(?:allotment|allotted)\b.{0,40}\b(?:shares?|ipo)\b",
+)
+CORPORATE_ACTION_PATTERNS = (
+    r"\bbonus\s+(?:shares?|issue)\b",
+    r"\b(?:stock|share)\s+split\b|\bsub-?division\b",
+    r"\brights\s+(?:issue|entitlement)\b",
+    r"\bbuy-?back\b",
+    r"\bface\s+value\s+split\b",
+)
 UPCOMING_DEBIT_PATTERNS = (
     r"\bwill\s+be\s+(?:presented|debited|deducted|charged)\b",
     r"\b(?:e-?mandate|mandate|nach|auto\s*pay|autopay|standing\s+instruction)\b",
@@ -145,6 +200,9 @@ INVESTMENT_PATTERNS = (
     r"\b(?:demat|cdsl|nsdl)\b",
     r"\b(?:dividend|bonus\s+shares|stock\s+split)\b",
 )
+#: An AWB or courier docket makes it a parcel, whatever else the text says.
+TRACKING_ONLY = re.compile(r"\b(?:awb|docket|consignment|tracking\s+(?:id|no))\b", re.IGNORECASE)
+
 GOVT_PATTERNS = (
     r"\b(?:e-?challan|challan)\b",
     r"\b(?:income\s+tax|itr|tds|form\s+16)\b",
@@ -203,6 +261,11 @@ DOMAIN_BY_INTENT: dict[Intent, str] = {
     Intent.OTP: "security",
     Intent.VOUCHER_ISSUED: "perks",
     Intent.LOGISTICS: "logistics",
+    Intent.TRAVEL: "travel",
+    Intent.TRADE: "finance",
+    Intent.DIVIDEND: "finance",
+    Intent.IPO: "finance",
+    Intent.CORPORATE_ACTION: "finance",
     Intent.GOVT_NOTICE: "government",
     Intent.HEALTH: "health",
     Intent.BANK_UPSELL: "marketing",
@@ -307,7 +370,42 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
             evidence.append("refund credited")
             return Intent.REFUND_CREDITED, 0.85, evidence, flags
 
-    # 4. Logistics (before OTP: delivery handover codes are not auth OTPs) --
+    # 3.5 Demat: dividends, IPO, corporate actions, order executions --------
+    # These describe shares, not rupees. Checked before generic money language
+    # because "Rs 120 dividend credited" is income, not spending, and "10 shares
+    # of INFY bought" moves no money in this message at all.
+    if _any(DIVIDEND_PATTERNS, lower):
+        evidence.append("dividend language")
+        return Intent.DIVIDEND, 0.88, evidence, flags
+    ipo_hit = _any(IPO_PATTERNS, lower)
+    if ipo_hit:
+        evidence.append(f"IPO/ASBA language ({ipo_hit.strip()})")
+        return Intent.IPO, 0.85, evidence, flags
+    corp_hit = _any(CORPORATE_ACTION_PATTERNS, lower)
+    if corp_hit:
+        evidence.append(f"corporate action ({corp_hit.strip()})")
+        return Intent.CORPORATE_ACTION, 0.85, evidence, flags
+    trade_hit = _any(TRADE_PATTERNS, lower)
+    # A SIP debit reads like an allotment ("units allotted") but the money really
+    # did leave the bank account. When a debit verb names an account, this is a
+    # bank message: it falls through to INVESTMENT so the rupees are excluded as
+    # an investment rather than silently dropped as "no money in this message".
+    money_in_bank = bool(DEBIT_VERBS.search(lower)) and bool(
+        re.search(r"\b(?:a/c|acct|account|xx\d{4}|\*{2,}\d{4})\b", lower)
+    )
+    if trade_hit and not money_in_bank and not (ctx.balance is not None and DEBIT_VERBS.search(ctx.text)):
+        evidence.append(f"trade language ({trade_hit.strip()})")
+        return Intent.TRADE, 0.8, evidence, flags
+
+    # 4. Travel and logistics (before OTP: handover codes are not auth OTPs) --
+    # A ticket is a booking, a parcel is a delivery, and the two must not be
+    # mixed: one is retained until the journey, the other is dead on arrival.
+    is_travel = _any(TRAVEL_PATTERNS, lower)
+    if is_travel and not TRACKING_ONLY.search(lower):
+        mode_hit = next((mode for mode, pat in TRAVEL_MODE_PATTERNS if re.search(pat, lower)), "other")
+        evidence.append(f"travel booking ({mode_hit})" + (f" / PNR {ctx.pnr}" if ctx.pnr else ""))
+        return Intent.TRAVEL, 0.88 if ctx.pnr else 0.8, evidence, flags
+
     is_status = _any(LOGISTICS_PATTERNS, lower)
     if ctx.pnr or ctx.tracking or is_status or ctx.handover:
         handover_ok = bool(ctx.handover and DELIVERY_CONTEXT.search(ctx.text) and not AUTH_CONTEXT.search(ctx.text))
@@ -558,6 +656,16 @@ def _summary(intent: Intent, amount: Optional[float], merchant: Optional[Merchan
         return f"OTP for {extra}".strip()
     if intent == Intent.VOUCHER_ISSUED:
         return f"Voucher {extra}".strip()
+    if intent == Intent.TRAVEL:
+        return f"Travel booking {extra}".strip()
+    if intent == Intent.TRADE:
+        return f"Trade {extra}".strip()
+    if intent == Intent.DIVIDEND:
+        return f"Dividend {_fmt_inr(amount)} {extra}".strip()
+    if intent == Intent.IPO:
+        return f"IPO update {extra}".strip()
+    if intent == Intent.CORPORATE_ACTION:
+        return f"Corporate action {extra}".strip()
     if intent == Intent.LOGISTICS:
         return f"Delivery/travel update {extra}".strip()
     if intent == Intent.GOVT_NOTICE:
@@ -569,6 +677,111 @@ def _summary(intent: Intent, amount: Optional[float], merchant: Optional[Merchan
     if intent == Intent.PHISHING_SUSPECT:
         return "Suspected phishing — do not tap links"
     return "Unclassified message"
+
+
+_ROUTE_RE = re.compile(
+    r"\bfrom\s+(?P<origin>[A-Z][A-Za-z ]{2,20}?)\s+to\s+(?P<destination>[A-Z][A-Za-z ]{2,20}?)(?:\s+on|\s*[,.]|$)",
+    re.IGNORECASE,
+)
+_ROUTE_ARROW_RE = re.compile(
+    r"\b(?P<origin>[A-Z][A-Za-z ]{2,20}?)\s*(?:->|→|to)\s*(?P<destination>[A-Z][A-Za-z ]{2,20}?)\s+(?:on|at|bus|train|flight)\b",
+    re.IGNORECASE,
+)
+#: "Bengaluru to Chennai, 2 passengers" — case-sensitive on purpose, because
+#: "Rs 500 to VPA" lowercased would otherwise look like a route.
+_ROUTE_PAIR_RE = re.compile(
+    r"\b(?P<origin>[A-Z][a-z]{2,18})\s+to\s+(?P<destination>[A-Z][a-z]{2,18})\s*(?:,|\.|$)"
+)
+_PASSENGERS_RE = re.compile(r"\b(?P<count>\d)\s*(?:adult|passenger|pax|traveller)", re.IGNORECASE)
+
+
+def _route(text: str) -> tuple[Optional[str], Optional[str]]:
+    """Origin/destination, only when the message spells the pattern out.
+
+    Deliberately narrow: guessing a city from a station code is how a Delhi
+    traveller ends up with a Chennai itinerary.
+    """
+    for pattern in (_ROUTE_RE, _ROUTE_ARROW_RE, _ROUTE_PAIR_RE):
+        match = pattern.search(text)
+        if match:
+            origin = match.group("origin").strip(" .")
+            destination = match.group("destination").strip(" .")
+            if origin.lower() != destination.lower():
+                return origin, destination
+    return None, None
+
+
+def _passenger_count(lower: str) -> Optional[int]:
+    match = _PASSENGERS_RE.search(lower)
+    return int(match.group("count")) if match else None
+
+
+def _trade_info(
+    intent: "Intent",
+    text: str,
+    lower: str,
+    merchant: Optional["Merchant"],
+    template_hit: Optional[templates.TemplateHit],
+    amount_hit: Optional[extract.AmountHit],
+    ctx: "_Ctx",
+) -> "TradeInfo":
+    """Describe the security. Never the rupees — those belong to another message."""
+    scheme = extract.find_scheme(text)
+    symbol = extract.find_symbol(text) or (merchant.raw if merchant and merchant.raw and merchant.raw.isupper() else None)
+    if scheme:
+        # A mutual-fund allotment names a scheme, not a ticker. Reporting
+        # "PARAG PARIKH FLEXI CAP" as a symbol would break any later price lookup.
+        symbol = None
+    quantity = extract.find_quantity(text)
+    price = None
+    price_match = re.search(
+        r"(?:@|\bat\b|\bnav(?:\s+of)?)\s*(?:Rs\.?\s*|INR\s*)?(?P<price>[\d,]+(?:\.\d{1,2})?)\s*(?:per\s+share)?",
+        text,
+        re.IGNORECASE,
+    )
+    if price_match:
+        try:
+            price = float(price_match.group("price").replace(",", ""))
+        except ValueError:
+            price = None
+    if template_hit is not None:
+        if not quantity and template_hit.fields.get("quantity"):
+            quantity = extract.find_quantity(template_hit.fields["quantity"] + " qty")
+        if price is None and template_hit.fields.get("price"):
+            try:
+                price = float(template_hit.fields["price"].replace(",", ""))
+            except ValueError:
+                price = None
+        symbol = symbol or (template_hit.merchant if template_hit.template_id.startswith("broker.") else None)
+
+    if intent is Intent.DIVIDEND:
+        kind = "dividend"
+    elif intent is Intent.IPO:
+        kind = "ipo_refund" if re.search(r"\brefund|unblock", lower) else ("ipo_allot" if re.search(r"\ballot", lower) else "ipo_apply")
+    elif intent is Intent.CORPORATE_ACTION:
+        kind = (
+            "bonus"
+            if "bonus" in lower
+            else "split"
+            if "split" in lower or "sub-division" in lower
+            else "rights"
+            if "rights" in lower
+            else "buyback"
+        )
+    else:
+        kind = "sell" if re.search(r"\b(?:sold|sell|selling|sale)\b", lower) else "buy"
+
+    return TradeInfo(
+        kind=kind,  # type: ignore[arg-type]
+        symbol=symbol,
+        isin=extract.find_isin(text),
+        quantity=quantity,
+        price=price,
+        exchange="NSE" if re.search(r"\bnse\b", lower) else "BSE" if re.search(r"\bbse\b", lower) else None,
+        broker=merchant.clean if merchant else None,
+        scheme=scheme,
+        folio=(m.group(1) if (m := re.search(r"\bfolio\b[^A-Za-z0-9]{0,4}([A-Z0-9]{3,12})", text, re.IGNORECASE)) else None),
+    )
 
 
 def _nearest_future(dates: list[extract.DateHit], now: datetime) -> Optional[datetime]:
@@ -635,6 +848,20 @@ def analyse(
     if merchant is None and merchant_raw:
         merchant = Merchant(raw=merchant_raw, source="none", confidence=0.3)
         flags.append("merchant_unresolved")
+    if merchant is None and institution is not None and intent == Intent.EXPENSE:
+        # A carrier or a brand can be the payee in its own message: "Recharge of
+        # Rs 349 successful" from AD-JIO-S is spending at Jio. Banks are
+        # deliberately excluded: their SMS names the account, not a shop, so
+        # "SMS charges" must not become a merchant called HDFC Bank.
+        if institution.kind in {EntityKind.TELECOM, EntityKind.BRAND}:
+            category = catalog.category_of_clean(institution.name) or "Uncategorized"
+            merchant = Merchant(
+                raw=institution.name,
+                clean=institution.name,
+                category=category,
+                source="institution",
+                confidence=0.6,
+            )
 
     amount_hit = ctx.amount
     amount = None
@@ -731,6 +958,51 @@ def analyse(
             extra = f"on {event.reminder.due_date:%d %b %Y}"
         if biller:
             extra = f"{biller} {extra}".strip()
+
+    elif intent == Intent.TRAVEL:
+        mode = next((m for m, pat in TRAVEL_MODE_PATTERNS if re.search(pat, ctx.lower)), "other")
+        provider = next((name for name, pat in TRAVEL_PROVIDERS if re.search(pat, ctx.lower)), None)
+        origin, destination = _route(text)
+        event.logistics = LogisticsInfo(
+            mode=mode,  # type: ignore[arg-type]
+            status="cancelled" if re.search(r"\bcancell?ed\b", ctx.lower) else "confirmed",
+            provider=provider or (merchant.clean if merchant else None),
+            pnr=ctx.pnr,
+            journey_number=extract.find_journey(text),
+            seat=extract.find_seat(text),
+            origin=origin,
+            destination=destination,
+            passengers=_passenger_count(ctx.lower),
+            event_at=_nearest_future(ctx.dates, now),
+        )
+        bits = [
+            event.logistics.provider or "",
+            f"PNR {ctx.pnr}" if ctx.pnr else "",
+            f"{origin} to {destination}" if origin and destination else "",
+        ]
+        extra = " ".join(b for b in bits if b)
+
+    elif intent in {Intent.TRADE, Intent.DIVIDEND, Intent.IPO, Intent.CORPORATE_ACTION}:
+        event.trade = _trade_info(intent, text, ctx.lower, merchant, template_hit, amount_hit, ctx)
+        trade = event.trade
+        # A trade confirmation quotes a price, not a payment. When the only rupee
+        # figure in the message is the price ("NAV Rs 75.20", "@ Rs 1,450"), the
+        # money leg is missing and inventing an amount would double-count it.
+        if (
+            intent is Intent.TRADE
+            and event.amount is not None
+            and trade.price is not None
+            and abs(event.amount.value - trade.price) < 0.005
+        ):
+            event.amount = None
+            event.evidence.append("only rupee figure was the per-unit price, not a payment")
+        name = trade.symbol or trade.scheme or ""
+        bits = [
+            f"{trade.quantity:g} {name}".strip() if trade.quantity else name,
+            f"@ ₹{trade.price:,.2f}" if trade.price else "",
+            trade.broker or "",
+        ]
+        extra = " ".join(b for b in bits if b)
 
     elif intent == Intent.LOGISTICS:
         mode = "parcel"

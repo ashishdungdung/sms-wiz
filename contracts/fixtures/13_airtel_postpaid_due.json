@@ -1,0 +1,17 @@
+{
+  "id": "airtel_postpaid_due",
+  "description": "A carrier bill notice is a dated reminder: the date is the message, and no money has moved yet.",
+  "input": {
+    "sender": "AD-AIRTEL-S",
+    "received_at": "2025-03-04T08:00:00+05:30",
+    "body": "Your postpaid bill of Rs 799.00 is due on 10-03-2025. Pay now to avoid disconnection of services."
+  },
+  "expect": {
+    "intent": "bill_due",
+    "apple_action": "transaction",
+    "apple_subaction": "transactionalReminders",
+    "counts_toward_spend": false,
+    "ledger_treatment": "none",
+    "amount": 799.0
+  }
+}

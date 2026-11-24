@@ -1,0 +1,16 @@
+{
+  "id": "irctc_train_ticket",
+  "description": "A booked ticket is a travel record with a PNR. The fare was already charged by the payment message.",
+  "input": {
+    "sender": "AD-IRCTC-S",
+    "received_at": "2025-03-03T09:30:00+05:30",
+    "body": "Your ticket has been booked. PNR: 2459182736, Train 12627, Coach B2, Berth 45, from New Delhi to Bengaluru."
+  },
+  "expect": {
+    "intent": "travel",
+    "apple_action": "transaction",
+    "apple_subaction": "transactionalOrders",
+    "counts_toward_spend": false,
+    "ledger_treatment": "none"
+  }
+}

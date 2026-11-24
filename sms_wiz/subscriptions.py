@@ -221,7 +221,43 @@ def build(rows: Iterable[dict[str, Any]], today: Optional[date] = None) -> list[
         series.cadence = cadence
         series.confidence = confidence
         out.append(series)
-    return sorted(out, key=lambda s: (s.next_due or date.max, s.name))
+    return sorted(_merge_duplicate_billers(out), key=lambda s: (s.next_due or date.max, s.name))
+
+
+def _merge_duplicate_billers(series: list[Series]) -> list[Series]:
+    """Fold a bill notice into the payment series it describes.
+
+    An Airtel bill arrives twice a month in real life: "your bill of Rs 799 is
+    due on the 5th" and "Rs 799 debited to AIRTEL". They are the same commitment,
+    and the second one carries the account, so the keys differ (``AIRTEL`` vs
+    ``AIRTEL:4092``). Counting both would report a ₹799 bill as ₹1,598 committed.
+
+    Only a *notice-only* series (no money at all) is folded in. Two series that
+    both carry payments are left alone even when the biller matches: paying the
+    same biller from two accounts really is two commitments.
+    """
+    by_name: dict[str, list[Series]] = {}
+    for item in series:
+        by_name.setdefault(item.name.strip().upper(), []).append(item)
+
+    kept: list[Series] = []
+    for group in by_name.values():
+        if len(group) == 1:
+            kept.extend(group)
+            continue
+        # "Payment" means an actual expense row. A bill_due row carries an amount
+        # too (the amount due), so amounts alone cannot tell the two apart.
+        payers = [item for item in group if "expense" in item.sources]
+        notices = [item for item in group if item not in payers]
+        if not payers:
+            kept.extend(group)
+            continue
+        target = max(payers, key=lambda s: len(s.amounts))
+        for notice in notices:
+            target.due_dates = sorted(set(target.due_dates) | set(notice.due_dates))
+            target.sources |= notice.sources
+        kept.extend(payers)
+    return kept
 
 
 def summary(rows: Iterable[dict[str, Any]], today: Optional[date] = None) -> dict[str, Any]:

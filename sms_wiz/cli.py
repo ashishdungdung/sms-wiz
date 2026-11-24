@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import analytics, cards, notify, subscriptions
+from . import analytics, cards, catalog, notify, registry, subscriptions, templates
 from .db import connect
 from .merchants import MerchantDictionary
 from .models import IngestRequest
@@ -135,7 +135,7 @@ SAMPLE_MESSAGES: list[dict[str, str]] = [
         "body": (
             "Your ticket has been booked. PNR: 2459182736, Train 12627, Coach B2, Berth 45. Chart prepared."
         ),
-        "expect": "logistics (train)",
+        "expect": "travel (train, not spend)",
     },
     {
         "name": "Salary credit",
@@ -240,7 +240,52 @@ SAMPLE_MESSAGES: list[dict[str, str]] = [
         "name": "Dividend credited",
         "sender": "AD-CDSL-S",
         "body": "Dividend of Rs 1,200 credited to your demat account for INFOSYS LTD on {d0}.",
-        "expect": "investment (not income)",
+        "expect": "dividend (income, not spend)",
+    },
+    # -- demat, travel and bills -------------------------------------------
+    {
+        "name": "Zerodha order executed",
+        "sender": "AD-ZERODH-S",
+        "body": (
+            "Your order for 10 shares of INFY executed at Rs 1450.00 on NSE. Order ID 250301001234."
+        ),
+        "expect": "trade (units, not spend)",
+    },
+    {
+        "name": "IPO application blocked",
+        "sender": "AD-HDFCBK-T",
+        "body": (
+            "Rs 15,000.00 blocked from A/c XX1094 for ASBA IPO application. UPI mandate accepted "
+            "for 100 shares."
+        ),
+        "expect": "ipo (blocked, not spend)",
+    },
+    {
+        "name": "Bonus shares credited",
+        "sender": "AD-CDSL-S",
+        "body": "1:1 bonus shares of INFY credited to your demat account ISIN INE009A01021.",
+        "expect": "corporate_action",
+    },
+    {
+        "name": "RedBus ticket",
+        "sender": "AD-REDBUS-S",
+        "body": "Bus ticket booked. PNR 88123, Bengaluru to Chennai, 2 passengers, Rs 1,400",
+        "expect": "travel (bus)",
+    },
+    {
+        "name": "Airtel postpaid bill due",
+        "sender": "AD-AIRTEL-S",
+        "body": "Your postpaid bill of Rs 799.00 is due on {d30}. Pay now to avoid disconnection.",
+        "expect": "bill_due (carrier)",
+    },
+    {
+        "name": "ACT Fibernet broadband debit",
+        "sender": "AD-HDFCBK-T",
+        "body": (
+            "Rs.1,335.00 debited from A/c XX4092 to VPA ACTFIBERNET@axisbank on {d0}. "
+            "Avl Bal: Rs 9,665.00"
+        ),
+        "expect": "expense (broadband)",
     },
     # -- multilingual ------------------------------------------------------
     {
@@ -380,6 +425,33 @@ def run_demo(db_path: str | None = None, verbose: bool = False) -> int:
             print(f"  {card['bank'] or 'card'} XX{card['last4']}: statement ₹{card['statement_amount'] or 0:,.2f} "
                   f"paid ₹{card['paid']:,.2f} → {card['status']}")
 
+    book = overview["investments"]
+    if book["holdings"]:
+        print("\ndemat (units from confirmations, not a holding statement)")
+        for holding in book["holdings"][:5]:
+            name = holding["symbol"] or holding["security"]
+            print(f"  {name:22} {holding['net_quantity']:>8g} units  bought ₹{holding['buy_value']:>9,.2f}"
+                  f"  sold ₹{holding['sell_value']:>9,.2f}  {holding['broker']}")
+        if book["dividend_total"]:
+            print(f"  dividends ₹{book['dividend_total']:,.2f} (income, not refund)   SIPs ₹{book['sip_total']:,.2f}")
+
+    trips = overview["travel"]
+    if trips["count"]:
+        print("\ntravel")
+        for trip in trips["trips"][:5]:
+            route = f"{trip['origin']}→{trip['destination']}" if trip["origin"] and trip["destination"] else ""
+            print(f"  {trip['mode']:7} {trip['provider'] or '-':14} PNR {trip['pnr'] or '-':>10}  {route:22} "
+                  f"{('₹' + format(trip['amount'], ',.2f')) if trip['amount'] else ''}")
+
+    bills = overview["bills"]
+    if bills["due"] or bills["paid"]:
+        print("\nbills")
+        for due in bills["due"][:5]:
+            print(f"  due   {due['biller']:20} ₹{float(due['amount_due'] or 0):>9,.2f}  on {due['due_date'] or '-'}"
+                  f"  {due['category']}")
+        for paid in bills["paid"][:5]:
+            print(f"  paid  {paid['category']:20} ₹{paid['paid']:>9,.2f}  {paid['count']} bills")
+
     planned = notify.plan([
         {"kind": alert["kind"], "severity": alert["severity"], "message": alert["message"], "data": {}}
         for alert in alerts_for_digest
@@ -406,6 +478,71 @@ def _stored_rows(explicit: str | None) -> list[dict[str, Any]]:
         return list_events(connection, limit=2000)
     finally:
         connection.close()
+
+
+def run_coverage(as_json: bool = False) -> int:
+    """Print coverage that can be counted from code, with no estimates.
+
+    Two numbers are deliberately separate: DLT *codes* (HDFCBK, HDFCCR) and
+    *institutions* (HDFC Bank). Reporting only the larger one is how a project
+    ends up claiming "71 banks" while covering 50.
+    """
+    reg = registry.coverage()
+    cat = catalog.coverage()
+    generic = {"bank", "card", "broker", "travel", "telecom", "utility"}
+    # A template's `bank` is a display name; only the ones a bank entity claims
+    # count as a bank, so FASTag and IRCTC are not smuggled into the tally.
+    template_banks = {
+        t.bank
+        for t in templates.TEMPLATES
+        if t.bank not in generic
+        and (entity := registry.ALIAS_INDEX.get(t.bank.upper())) is not None
+        and entity.kind is registry.EntityKind.BANK
+    }
+    covered = {registry.canonical_bank(name) for name in template_banks}
+    payload = {
+        "registry": reg,
+        "catalog": cat,
+        "templates": {
+            "total": len(templates.TEMPLATES),
+            "banks_with_own_shape": len(covered),
+            "banks": sorted(covered),
+            "bank_institutions_without_own_shape": sorted(
+                set(registry.bank_institutions()) - covered
+            ),
+            "generic_shapes": sorted(generic),
+            "shapes": sorted({t.id.split(".")[0] for t in templates.TEMPLATES}),
+        },
+        "intents": len(registry.Intent),
+        "routed_intents": len(registry.ROUTING),
+    }
+    if as_json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print("coverage (counted from registry.py / catalog.py / templates.py)")
+    print(f"  registry entities      {reg['unique_codes']:>4}  ({reg['declarations']} declarations, "
+          f"{reg['duplicate_codes_merged']} merged duplicate codes)")
+    print(f"  bank institutions      {reg['bank_institutions']:>4}  ({reg['bank_codes']} DLT codes: "
+          "one per bank plus one per card programme)")
+    print(f"  brokers                {cat['brokers_present']:>4}  declared {cat['brokers_declared']}")
+    print(f"  mobile operators       {cat['mobile_operators_present']:>4}  "
+          f"(broadband/DTH: {cat['by_category'].get('Mobile & Broadband', {}).get('brands', 0)} brands in one category)")
+    print(f"  market infrastructure  {cat['market_infrastructure_present']:>4}  NSE, BSE, MCX, CDSL, NSDL")
+    print(f"  merchant brands        {cat['brands']:>4}  in {cat['categories']} categories")
+    print(f"  dictionary keys        {cat['keys']:>4}  ({cat['duplicate_keys']} keys appear twice; last definition wins)")
+    tpl = payload["templates"]
+    print(f"  message templates      {tpl['total']:>4}  {tpl['banks_with_own_shape']} banks have their own "
+          f"shape; every other bank falls back to the generic ones")
+    print(f"    no own shape: " + ", ".join(tpl["bank_institutions_without_own_shape"][:12]) + " ...")
+    print(f"  intents                {payload['intents']:>4}  routed: {payload['routed_intents']}")
+    print()
+    print("  brokers:", ", ".join(catalog.STOCK_BROKERS))
+    print()
+    print("  brands per category:")
+    for label, counts in cat["by_category"].items():
+        print(f"    {label:32s} {counts['brands']:>3} brands {counts['keys']:>4} keys")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -451,6 +588,11 @@ def main(argv: list[str] | None = None) -> int:
 
     rules_cmd = sub.add_parser("rules-check", help="validate rules/filter_rules.json")
     rules_cmd.add_argument("--path", default=None)
+
+    coverage_cmd = sub.add_parser(
+        "coverage", help="count what is actually covered: banks, brokers, merchants, templates"
+    )
+    coverage_cmd.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
 
@@ -502,6 +644,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rules OK — {stats['rules']} rules {stats['by_action']}")
         print("sub-actions used: " + ", ".join(stats["sub_actions_used"]))
         return 0
+
+    if args.command == "coverage":
+        return run_coverage(as_json=args.json)
 
     if args.command in {"analytics", "subscriptions", "cards", "merchants", "digest"}:
         rows = _stored_rows(args.db)

@@ -71,15 +71,18 @@ class TestCorpusShape:
 
 class TestLedgerInvariants:
     def test_spend_is_the_expected_number(self, demo):
-        # ₹12,108, not ₹12,757: the Netflix charge says "on <30 days ago>", so
+        # Not ₹14,092: the Netflix charge says "on <30 days ago>", so
         # it posted in October and belongs to October. The message arrived in
         # November; the money did not move in November.
+        # ₹13,443: the broadband debit (₹1,335) is ordinary spending, while the
+        # ticket, the IPO block and the trade confirmation add nothing.
         overview = analytics.overview(demo["rows"], month="2026-11")
-        assert overview["month"]["spend"] == pytest.approx(12108.0)
+        assert overview["month"]["spend"] == pytest.approx(13443.0)
 
     def test_income_and_refunds_are_separate_from_spend(self, demo):
         overview = analytics.overview(demo["rows"], month="2026-11")
-        assert overview["month"]["income"] == pytest.approx(85000.0)
+        # Salary 85,000 plus a 1,200 dividend: a dividend is income, not a refund.
+        assert overview["month"]["income"] == pytest.approx(86200.0)
         assert overview["month"]["refunds"] == pytest.approx(1850.0)
 
     def test_excluded_money_splits_by_reason(self, demo):
@@ -95,7 +98,7 @@ class TestLedgerInvariants:
         counted = [r for r in demo["rows"] if r["counts_toward_spend"]]
         assert len({r["event_id"] for r in counted}) == len(counted)
         spend = sum(r["amount_value"] for r in counted)
-        assert spend == pytest.approx(12757.0)
+        assert spend == pytest.approx(14092.0)
 
     def test_card_spend_is_not_a_bill(self, demo):
         croma = [r for r in demo["rows"] if (r["merchant_clean"] or "") == "Croma"]

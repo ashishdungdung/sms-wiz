@@ -91,6 +91,20 @@ DANGER_TERMS: tuple[str, ...] = (
     "pin",
     "cvv",
     "click here",
+    # India-specific scam scripts, added after real messages showed these are
+    # the whole message, with no other danger word in them.
+    "digital arrest",
+    "cbi case",
+    "police case",
+    "money laundering",
+    "narcotics",
+    "illegal items",
+    "customs duty",
+    "guaranteed return",
+    "sure shot",
+    "registration fee",
+    "stock tips",
+    "sure shot",
 )
 
 _WS = re.compile(r"\s+")

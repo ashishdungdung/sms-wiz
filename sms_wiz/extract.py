@@ -485,7 +485,12 @@ def is_suspicious_tld(domain: str) -> bool:
 # Travel / logistics
 # --------------------------------------------------------------------------
 
-_PNR_RE = re.compile(r"\bpnr\b[^A-Za-z0-9]{0,6}([A-Z0-9]{6}|[0-9]{10})\b", re.IGNORECASE)
+#: Indian train PNRs are always 10 digits; bus and hotel references are shorter
+#: (RedBus uses 6-8). The lookahead requires at least one digit so "PNR NUMBER"
+#: never becomes a reference.
+_PNR_RE = re.compile(
+    r"\bpnr\b[^A-Za-z0-9]{0,6}(?=[A-Z0-9]*\d)([A-Z0-9]{5,12})\b", re.IGNORECASE
+)
 _AWB_RE = re.compile(
     r"\b(?:awb|tracking|consignment|docket)\b\s*(?:id|no\.?|number)?\s*[:#]?\s*([A-Za-z0-9]{8,16})\b",
     re.IGNORECASE,
@@ -502,9 +507,54 @@ _HANDOVER_RE = re.compile(
 )
 
 
+_ISIN_RE = re.compile(r"\bISIN\s*:?\s*(IN[A-Z0-9]{10})\b", re.IGNORECASE)
+_QUANTITY_RE = re.compile(
+    r"\b(?P<qty>[\d,]+(?:\.\d+)?)\s*(?:qty|quantity|shares?|units?)\b", re.IGNORECASE
+)
+_SYMBOL_RE = re.compile(
+    r"(?:of|for|in)\s+(?P<symbol>[A-Z][A-Z0-9&\-]{2,19})\b(?!\s*(?:bank|limited|ltd|inc))"
+)
+
+
+def find_isin(text: str) -> Optional[str]:
+    """ISIN is the only unambiguous security identifier in an Indian SMS."""
+    match = _ISIN_RE.search(text)
+    return match.group(1).upper() if match else None
+
+
+def find_quantity(text: str) -> Optional[float]:
+    match = _QUANTITY_RE.search(text)
+    if not match:
+        return None
+    try:
+        return float(match.group("qty").replace(",", ""))
+    except ValueError:  # pragma: no cover - defensive
+        return None
+
+
+def find_symbol(text: str) -> Optional[str]:
+    """A ticker only when it is shouty and right after of/for/in."""
+    match = _SYMBOL_RE.search(text)
+    return match.group("symbol") if match else None
+
+
 def find_pnr(text: str) -> Optional[str]:
     match = _PNR_RE.search(text)
     return match.group(1) if match else None
+
+
+#: A mutual-fund scheme name, as it appears on an allotment SMS. Kept narrow to
+#: the words every AMC does put at the end, and anchored on a capital letter so
+#: "units of the fund" does not match.
+_SCHEME_RE = re.compile(
+    r"\b([A-Z][A-Za-z0-9&\.\-]*(?:\s+[A-Za-z0-9&\.\-]+){0,8}\s+"
+    r"(?:Fund|Funds|Flexi\s+Cap|ELSS|Growth\s+Plan|Direct\s+Plan))\b"
+)
+
+
+def find_scheme(text: str) -> Optional[str]:
+    match = _SCHEME_RE.search(text)
+    return " ".join(match.group(1).split()) if match else None
 
 
 def find_tracking(text: str) -> Optional[str]:

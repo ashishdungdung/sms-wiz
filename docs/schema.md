@@ -72,9 +72,10 @@ What the message is *about*. One per message, chosen by an ordered rule chain
 (`sms_wiz/classify.py`):
 
 ```
-phishing → cc_bill_payment → refund → logistics → otp → fastag → instrument_load
-→ atm → investment → upcoming_debit → bill_due → voucher → govt → expense/income
-→ bank_upsell → commercial_promo → unknown
+phishing → cc_bill_payment → refund → dividend / ipo / corporate_action / trade
+→ travel → logistics → otp → fastag → instrument_load → atm → investment
+→ upcoming_debit → bill_due → voucher → govt → expense/income → bank_upsell
+→ commercial_promo → unknown
 ```
 
 Order is the design. Examples of what it protects:
@@ -84,6 +85,30 @@ Order is the design. Examples of what it protects:
 * A delivery handover code is `LOGISTICS`, not `OTP` — that is a code you must
   read out, not a code you must protect.
 * A FASTag toll is `FASTAG_TOLL`, a FASTag recharge is `INSTRUMENT_LOAD`.
+* Demat comes before travel, and travel before logistics: "10 shares of INFY
+  executed" moves units, not rupees, and a PNR belongs to a journey while an AWB
+  belongs to a parcel. A bus ticket with a PNR is `TRAVEL`, not a train.
+* A plan for `TRAVEL` carries `logistics.mode` (`train`, `bus`, `flight`,
+  `hotel`), the PNR, the route and the passenger count. `TRADE` carries
+  `trade.kind` (`buy`, `sell`, `sip`, `ipo_apply`, `dividend`, `bonus`…), the
+  ISIN, the quantity and the *price* — never a payment, because the bank message
+  for that payment arrives separately and is the one that may count.
+
+## `trade` — shares and units
+
+| field | meaning | example |
+| --- | --- | --- |
+| `kind` | buy / sell / sip / ipo_apply / ipo_allot / dividend / bonus / split / rights | `buy` |
+| `symbol` | ticker, when the message names one | `INFY` |
+| `scheme` | mutual-fund scheme, when the message names one | `Parag Parikh Flexi Cap` |
+| `isin` | ISIN | `INE009A01021` |
+| `quantity` | units or shares | `10` |
+| `price` | per-unit price, not the total | `1450.0` |
+| `broker` | broker or AMC that sent it | `Zerodha` |
+| `folio` | folio number when present | `12345` |
+
+A per-unit price is never promoted to `amount`: "NAV Rs 75.20" is not a payment,
+and recording it would count ₹75.20 of money that never moved.
 * A bank's loan pitch reaches `BANK_UPSELL` only after every real-money rule has
   declined. A real debit that *also* advertises EMI stays `EXPENSE` and gets the
   `embedded_upsell` flag.

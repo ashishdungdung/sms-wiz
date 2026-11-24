@@ -86,7 +86,16 @@ A rule file that would produce a wrong or impossible decision fails the build
 The "danger signal" list lives in `rules.py` (`DANGER_TERMS`): `apk`,
 `install app`, `kyc`, `winner`, `won`, `lottery`, `prize`, `blocked`,
 `suspended`, `verify`, `refund request`, `account will be`, `otp`, `password`,
-`pin`, `cvv`, `click here`.
+`pin`, `cvv`, `click here`, plus the India-specific scripts the corpus turned up:
+`digital arrest`, `cbi case`, `police case`, `money laundering`, `narcotics`,
+`illegal items`, `customs duty`, `guaranteed return`, `sure shot`,
+`registration fee`, `stock tips`.
+
+A plain debit or credit alert is deliberately **not** matched by any rule: the
+answer is `allow`, iOS keeps it in the inbox, and the app classifies it on
+ingest. The offline pass only rescues messages that would otherwise be buried —
+due dates, pre-debits, OTPs, parcel codes, trade confirmations. A message with
+money in it never becomes `promotion` just because an offer rides along.
 
 ---
 

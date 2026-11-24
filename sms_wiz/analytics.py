@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
-from .catalog import CATEGORY_BY_LABEL, category_slug, is_essential
+from .catalog import CATEGORY_BY_LABEL, category_of_clean, category_slug, is_essential
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -363,4 +363,268 @@ def overview(rows: Iterable[dict[str, Any]], month: Optional[str] = None) -> dic
         "upi": upi_stats(current_month_rows),
         "cards": card_payments(rows)[:10],
         "categories": category_breakdown(current_month_rows),
+        # Domain views. None of these change the spend total above.
+        "investments": investment_book(rows),
+        "travel": travel_log(rows, today=today),
+        "bills": bill_calendar(rows, today=today),
+    }
+
+
+# --------------------------------------------------------------------------
+# Domain views: demat, travel, bills
+#
+# These read the same rows as the spend views but answer different questions,
+# and none of them touch the spend total. A trade, a ticket and an electricity
+# bill are either not spend (trade) or ordinary spend (bill); what the user needs
+# here is the *record*: units held, PNR, due date.
+# --------------------------------------------------------------------------
+
+
+def _logistics(row: dict[str, Any]) -> dict[str, Any]:
+    value = payload(row).get("logistics")
+    return value if isinstance(value, dict) else {}
+
+
+def _trade(row: dict[str, Any]) -> dict[str, Any]:
+    value = payload(row).get("trade")
+    return value if isinstance(value, dict) else {}
+
+
+def _reminder(row: dict[str, Any]) -> dict[str, Any]:
+    value = payload(row).get("reminder")
+    return value if isinstance(value, dict) else {}
+
+
+def _when(row: dict[str, Any]) -> Optional[datetime]:
+    return received(row)
+
+
+#: Order events are not spend, so they are invisible to ``counted_rows``. These
+#: views therefore walk every non-duplicate row and filter by intent themselves.
+def _rows_of(rows: Iterable[dict[str, Any]], *intents: str) -> list[dict[str, Any]]:
+    wanted = {i.lower() for i in intents}
+    out = []
+    for row in rows:
+        if row.get("dedup_status") == "suppressed_duplicate":
+            continue
+        if str(row.get("intent") or "").lower() in wanted:
+            out.append(row)
+    return out
+
+
+def _key(row: dict[str, Any], trade: dict[str, Any]) -> str:
+    return (
+        trade.get("symbol")
+        or trade.get("scheme")
+        or _merchant(row)
+        or "Unknown"
+    )
+
+
+def investment_book(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Units, not rupees: what the demat account did, per security.
+
+    ``net_quantity`` is buys minus sells. It is **not** a portfolio value: the app
+    never sees a holding statement, only order confirmations, so a position that
+    predates the inbox is invisible here. The docstring says the same thing to the
+    API consumer through ``caveat``.
+    """
+    rows = list(rows)
+    trades = _rows_of(rows, "trade")
+    dividends = _rows_of(rows, "dividend")
+    ipos = _rows_of(rows, "ipo")
+    actions = _rows_of(rows, "corporate_action")
+
+    holdings: dict[str, dict[str, Any]] = {}
+    for row in trades:
+        info = _trade(row)
+        name = _key(row, info)
+        item = holdings.setdefault(
+            name,
+            {
+                "security": name,
+                "symbol": info.get("symbol"),
+                "isin": info.get("isin"),
+                "broker": info.get("broker") or _merchant(row),
+                "buys": 0,
+                "sells": 0,
+                "net_quantity": 0.0,
+                "buy_value": 0.0,
+                "sell_value": 0.0,
+                "last_price": None,
+                "sip_count": 0,
+            },
+        )
+        qty = float(info.get("quantity") or 0.0)
+        price = float(info.get("price") or 0.0)
+        kind = str(info.get("kind") or "other").lower()
+        if kind == "sell":
+            item["sells"] += 1
+            item["net_quantity"] -= qty
+            item["sell_value"] += qty * price
+        else:  # buy, sip and anything unlabelled that moved units in
+            item["buys"] += 1
+            item["net_quantity"] += qty
+            item["buy_value"] += qty * price
+            if kind == "sip":
+                item["sip_count"] += 1
+        if price:
+            item["last_price"] = price
+        if info.get("isin") and not item["isin"]:
+            item["isin"] = info["isin"]
+        if info.get("broker") and item["broker"] in ("Unknown merchant", None):
+            item["broker"] = info["broker"]
+
+    dividend_total = sum(_money(r) for r in dividends)
+    for row in dividends:
+        info = _trade(row)
+        name = _key(row, info)
+        if name in holdings:
+            holdings[name]["dividend_received"] = round(
+                holdings[name].get("dividend_received", 0.0) + _money(row), 2
+            )
+
+    for item in holdings.values():
+        for field_name in ("buy_value", "sell_value"):
+            item[field_name] = round(item[field_name], 2)
+        item["net_quantity"] = round(item["net_quantity"], 4)
+        item.setdefault("dividend_received", 0.0)
+
+    return {
+        "holdings": sorted(holdings.values(), key=lambda h: (-h["buy_value"], h["security"])),
+        "sip_total": round(
+            sum(_money(r) for r in trades if str(_trade(r).get("kind") or "").lower() == "sip"),
+            2,
+        ),
+        "dividend_total": round(dividend_total, 2),
+        "ipo_applications": [
+            {
+                "security": _key(r, _trade(r)),
+                "amount": round(_money(r), 2),
+                "status": _trade(r).get("kind"),
+                "when": (_when(r).isoformat() if _when(r) else None),
+            }
+            for r in ipos
+        ],
+        "corporate_actions": [
+            {
+                "security": _key(r, _trade(r)),
+                "kind": _trade(r).get("kind"),
+                "quantity": _trade(r).get("quantity"),
+                "when": (_when(r).isoformat() if _when(r) else None),
+            }
+            for r in actions
+        ],
+        "caveat": (
+            "Built from order confirmations, not a holding statement: a position "
+            "that predates the inbox cannot appear here, and prices are the order "
+            "price, not the last traded price."
+        ),
+    }
+
+
+def travel_log(rows: Iterable[dict[str, Any]], today: Optional[date] = None) -> dict[str, Any]:
+    """Every ticket, boarding pass and hotel stay, newest first.
+
+    ``upcoming`` sorts on the message date because that is the only date the
+    message is required to carry. When a journey date is present it wins.
+    """
+    rows = list(rows)
+    today = today or datetime.now(IST).date()
+    trips = []
+    for row in _rows_of(rows, "travel"):
+        info = _logistics(row)
+        stamp = _when(row)
+        trips.append(
+            {
+                "mode": info.get("mode") or "other",
+                "provider": info.get("provider") or _merchant(row),
+                "pnr": info.get("pnr") or info.get("tracking_id"),
+                "journey_number": info.get("journey_number"),
+                "origin": info.get("origin"),
+                "destination": info.get("destination"),
+                "passengers": info.get("passengers"),
+                "seat": info.get("seat"),
+                "status": info.get("status"),
+                "amount": round(_money(row), 2),
+                "when": (stamp.isoformat() if stamp else None),
+                "upcoming": bool(stamp and (stamp.date() - today).days >= 0),
+            }
+        )
+    trips.sort(key=lambda t: t["when"] or "", reverse=True)
+    by_mode: dict[str, int] = {}
+    for trip in trips:
+        by_mode[trip["mode"]] = by_mode.get(trip["mode"], 0) + 1
+    spend = sum(t["amount"] for t in trips)
+    return {
+        "trips": trips,
+        "upcoming": [t for t in trips if t["upcoming"]],
+        "by_mode": by_mode,
+        "count": len(trips),
+        # Reported separately so nobody adds it to the month: a ticket bought with
+        # a card is already an expense on the card message.
+        "fare_seen": round(spend, 2),
+    }
+
+
+#: Human labels for the bill categories the catalog knows about.
+BILL_CATEGORIES = ("Utilities & Bills", "Mobile & Broadband", "Rent", "Insurance", "Bank Fees")
+
+
+def bill_calendar(rows: Iterable[dict[str, Any]], today: Optional[date] = None) -> dict[str, Any]:
+    """What is due, what was paid, and what recurs every month.
+
+    Due notices (``bill_due`` / ``upcoming_debit``) are reminders, not payments,
+    so they are kept in ``due`` and never counted as spend here. Paid bills are
+    the ordinary expenses whose category is a utility or a carrier.
+    """
+    rows = list(rows)
+    today = today or datetime.now(IST).date()
+    due = []
+    for row in _rows_of(rows, "bill_due", "upcoming_debit"):
+        info = _reminder(row)
+        due_date = info.get("due_date")
+        biller = info.get("biller") or _merchant(row)
+        label = _label(row)
+        if label == "Uncategorized" and biller:
+            # A due notice carries a biller, not a merchant row, so the category
+            # has to come from the catalog by name or the calendar is useless.
+            label = category_of_clean(biller) or label
+        due.append(
+            {
+                "biller": biller,
+                "kind": info.get("kind") or "other",
+                "amount_due": info.get("amount_due") or round(_money(row), 2),
+                "minimum_due": info.get("minimum_due"),
+                "due_date": str(due_date)[:10] if due_date else None,
+                "autopay": bool(info.get("autopay")),
+                "category": label,
+            }
+        )
+    due.sort(key=lambda d: d["due_date"] or "9999")
+
+    paid: dict[str, dict[str, Any]] = {}
+    for row in counted_rows(rows):
+        label = _label(row)
+        if label not in BILL_CATEGORIES:
+            continue
+        item = paid.setdefault(label, {"category": label, "paid": 0.0, "count": 0, "billers": {}})
+        item["paid"] += _money(row)
+        item["count"] += 1
+        biller = _merchant(row)
+        item["billers"][biller] = round(item["billers"].get(biller, 0.0) + _money(row), 2)
+    for item in paid.values():
+        item["paid"] = round(item["paid"], 2)
+        item["billers"] = [
+            {"biller": k, "paid": v}
+            for k, v in sorted(item["billers"].items(), key=lambda kv: -kv[1])
+        ][:5]
+
+    overdue = [d for d in due if d["due_date"] and d["due_date"] < today.isoformat()]
+    return {
+        "due": due,
+        "overdue": overdue,
+        "paid": sorted(paid.values(), key=lambda p: -p["paid"]),
+        "paid_total": round(sum(p["paid"] for p in paid.values()), 2),
+        "due_total": round(sum(float(d["amount_due"] or 0.0) for d in due), 2),
     }

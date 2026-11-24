@@ -146,3 +146,67 @@ class TestCalendarAndCommitment:
         assert subscriptions._infer_cadence([7, 7, 8])[0] == "weekly"
         assert subscriptions._infer_cadence([90, 91])[0] == "quarterly"
         assert subscriptions._infer_cadence([5, 100])[0] == "irregular"
+
+
+class TestBillNoticeAndPaymentAreOneCommitment:
+    """A carrier bills twice: "due on the 5th" and "Rs 799 debited to AIRTEL".
+
+    They are the same ₹799. Summing both would report ₹1,598 committed, so the
+    notice is folded into the payment series and only contributes dates.
+    """
+
+    def test_notice_and_payment_do_not_double_count(self, feed):
+        rows = feed(
+            ("AD-AIRTEL-S", "Your postpaid bill of Rs 799 is due on 05-01-2025.", datetime(2025, 1, 1, 10, 0)),
+            ("AD-AIRTEL-S", "Your postpaid bill of Rs 799 is due on 05-02-2025.", datetime(2025, 2, 1, 10, 0)),
+            ("AD-AIRTEL-S", "Your postpaid bill of Rs 799 is due on 05-03-2025.", datetime(2025, 3, 1, 10, 0)),
+            (
+                "AD-HDFCBK-T",
+                "Rs.799.00 debited from A/c XX4092 to VPA AIRTEL@axisbank on 05-01-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 1, 5, 10, 0),
+            ),
+            (
+                "AD-HDFCBK-T",
+                "Rs.799.00 debited from A/c XX4092 to VPA AIRTEL@axisbank on 05-02-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 2, 5, 10, 0),
+            ),
+            (
+                "AD-HDFCBK-T",
+                "Rs.799.00 debited from A/c XX4092 to VPA AIRTEL@axisbank on 05-03-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 3, 5, 10, 0),
+            ),
+        )
+        summary = subscriptions.summary(rows, today=date(2025, 3, 10))
+        assert summary["monthly_commitment"] == pytest.approx(799.0), (
+            "the bill notice and the payment it describes are one commitment"
+        )
+        airtel = [s for s in summary["series"] if s["name"] == "Airtel"]
+        assert len(airtel) == 1
+        assert airtel[0]["cadence"] == "monthly"
+        assert airtel[0]["category"] == "Mobile & Broadband"
+
+    def test_two_accounts_paying_the_same_biller_stay_two_series(self, feed):
+        rows = feed(
+            (
+                "AD-HDFCBK-T",
+                "Rs.500.00 debited from A/c XX1111 to VPA AIRTEL@axisbank on 05-02-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 2, 5, 10, 0),
+            ),
+            (
+                "AD-HDFCBK-T",
+                "Rs.500.00 debited from A/c XX1111 to VPA AIRTEL@axisbank on 05-03-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 3, 5, 10, 0),
+            ),
+            (
+                "AD-ICICIB-T",
+                "Rs.500.00 debited from A/c XX2222 to VPA AIRTEL@axisbank on 05-02-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 2, 5, 10, 0),
+            ),
+            (
+                "AD-ICICIB-T",
+                "Rs.500.00 debited from A/c XX2222 to VPA AIRTEL@axisbank on 05-03-25. Avl Bal Rs.9,000.00",
+                datetime(2025, 3, 5, 10, 0),
+            ),
+        )
+        summary = subscriptions.summary(rows, today=date(2025, 3, 10))
+        assert len([s for s in summary["series"] if s["name"] == "Airtel"]) == 2

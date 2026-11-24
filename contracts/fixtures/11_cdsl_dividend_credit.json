@@ -1,0 +1,15 @@
+{
+  "id": "cdsl_dividend_credit",
+  "description": "Dividend credited to a demat account is income. It is not a refund and it is not spending.",
+  "input": {
+    "sender": "AD-CDSLIN-S",
+    "received_at": "2025-03-02T11:00:00+05:30",
+    "body": "Dividend of Rs 120.00 credited for INFOSYS to your folio 1203456789 via CDSL."
+  },
+  "expect": {
+    "intent": "dividend",
+    "ledger_treatment": "income",
+    "counts_toward_spend": false,
+    "amount": 120.0
+  }
+}

@@ -399,6 +399,20 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
             rows = [r for r in rows if str(r.get("received_at", "")).startswith(month)]
         return analytics.upi_stats(rows)
 
+    @app.get("/api/v1/analytics/investments")
+    def analytics_investments() -> dict[str, Any]:
+        """Units and corporate actions. Not a portfolio value — see `caveat`."""
+        return analytics.investment_book(_rows())
+
+    @app.get("/api/v1/analytics/travel")
+    def analytics_travel() -> dict[str, Any]:
+        return analytics.travel_log(_rows())
+
+    @app.get("/api/v1/analytics/bills")
+    def analytics_bills() -> dict[str, Any]:
+        """Due notices and paid utilities, kept apart from the spend total."""
+        return analytics.bill_calendar(_rows())
+
     @app.get("/api/v1/subscriptions")
     def subscription_list() -> dict[str, Any]:
         rows = _rows()
