@@ -530,7 +530,10 @@ def run_coverage(as_json: bool = False) -> int:
           f"(broadband/DTH: {cat['by_category'].get('Mobile & Broadband', {}).get('brands', 0)} brands in one category)")
     print(f"  market infrastructure  {cat['market_infrastructure_present']:>4}  NSE, BSE, MCX, CDSL, NSDL")
     print(f"  merchant brands        {cat['brands']:>4}  in {cat['categories']} categories")
-    print(f"  dictionary keys        {cat['keys']:>4}  ({cat['duplicate_keys']} keys appear twice; last definition wins)")
+    short = "" if cat["matchable_keys"] == cat["distinct_keys"] else (
+        f"; {cat['matchable_keys']} long enough to match")
+    print(f"  dictionary keys        {cat['keys']:>4}  ({cat['distinct_keys']} distinct after normalising"
+          f"{short}; {cat['duplicate_keys']} appear twice, last wins)")
     tpl = payload["templates"]
     print(f"  message templates      {tpl['total']:>4}  {tpl['banks_with_own_shape']} banks have their own "
           f"shape; every other bank falls back to the generic ones")
@@ -554,7 +557,10 @@ def main(argv: list[str] | None = None) -> int:
     demo.add_argument("-v", "--verbose", action="store_true")
 
     serve = sub.add_parser("serve", help="run the HTTP API")
-    serve.add_argument("--host", default="0.0.0.0")
+    # Loopback by default: this server holds the user's ledger. Binding every
+    # interface is an explicit decision (`--host 0.0.0.0`), not a default that
+    # silently publishes card tail numbers on café Wi-Fi.
+    serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--db", default=None)
 
@@ -604,6 +610,14 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.db:
             os.environ["SMSWIZ_DB"] = args.db
+        exposed = args.host not in {"127.0.0.1", "localhost", "::1"}
+        if exposed and not os.environ.get("SMSWIZ_TOKEN"):
+            print(
+                f"warning: serving on {args.host} without SMSWIZ_TOKEN. Anyone who can reach "
+                "this port can read the ledger (amounts, merchants, card tails). Set "
+                "SMSWIZ_TOKEN or bind 127.0.0.1.",
+                file=sys.stderr,
+            )
         uvicorn.run("sms_wiz.api:app", host=args.host, port=args.port, reload=False)
         return 0
 

@@ -13,6 +13,7 @@ ambiguous last4 is reported as ambiguous rather than merged.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Optional
@@ -93,7 +94,42 @@ def _card_last4(row: dict[str, Any]) -> Optional[str]:
     return institution.get("card_last4") or None
 
 
-def _bank(row: dict[str, Any]) -> Optional[str]:
+#: Card issuers as they are named inside the message. Needed because the card
+#: and the account that pays for it are usually different banks: "Payment of
+#: Rs 12,480 towards your SBI Card XX4433" arrives from HDFC, and filing it under
+#: HDFC split one card into two.
+_CARD_ISSUERS: tuple[tuple[str, str], ...] = (
+    (r"\bsbi\s*card\b|\bsbi\b", "SBI Card"),
+    (r"\bicici\b", "ICICI Bank"),
+    (r"\bhdfc\b", "HDFC Bank"),
+    (r"\baxis\b", "Axis Bank"),
+    (r"\bkotak\b", "Kotak Mahindra Bank"),
+    (r"\bidfc\b", "IDFC FIRST Bank"),
+    (r"\bindusind\b", "IndusInd Bank"),
+    (r"\brbl\b", "RBL Bank"),
+    (r"\byes\s*bank\b|\byes\b", "YES Bank"),
+    (r"\bamex\b|\bamerican\s+express\b", "American Express"),
+    (r"\bbank\s+of\s+baroda\b|\bbob\b", "Bank of Baroda"),
+    (r"\bcanara\b", "Canara Bank"),
+    (r"\bfederal\b", "Federal Bank"),
+    (r"\bpnb\b|\bpunjab\s+national\b", "Punjab National Bank"),
+    (r"\bau\s+(?:small\s+finance|bank)\b", "AU Small Finance Bank"),
+    (r"\bstandard\s+chartered\b|\bsc\s+bank\b", "Standard Chartered"),
+    (r"\bciti\b", "Citibank India"),
+    (r"\bhsbc\b", "HSBC India"),
+    (r"\bonecard\b", "OneCard"),
+)
+
+
+def _issuer(row: dict[str, Any]) -> Optional[str]:
+    """Which bank owns the *card*, not which bank sent the SMS."""
+    text = str(row.get("body") or "")
+    for pattern, name in _CARD_ISSUERS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return name
+    # No issuer named in the text: the sender is the card's own bank for
+    # statements and swipes. A bill payment that names another bank was caught
+    # above, which is the case that used to split one card into two.
     data = payload(row)
     institution = data.get("institution") or {}
     return institution.get("name") or row.get("institution")
@@ -123,7 +159,7 @@ def build(rows: Iterable[dict[str, Any]]) -> list[CardState]:
         last4 = _card_last4(row)
         if not last4:
             continue
-        bank = _bank(row)
+        bank = _issuer(row)
         key = f"{(bank or 'card').upper()}:{last4}"
         card = cards.setdefault(key, CardState(key=key, last4=last4, bank=bank))
         when = received(row)

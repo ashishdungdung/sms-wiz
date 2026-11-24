@@ -42,7 +42,20 @@ _WS = re.compile(r"\s+")
 #: Source strength. Higher wins; ties keep the existing row.
 PRIORITY: dict[str, int] = {"learned": 0, "llm": 1, "vpa": 2, "seed": 3, "user": 4}
 
-_MIN_KEY_LEN = 4
+#: Shortest dictionary key we will match. The real guard is that a key must be a
+#: whole word (" KEY "), so a three-letter brand acronym cannot bleed into a
+#: longer word. Setting this to 4 silently dropped JIO, KFC, LIC, NSE, BSE, PVR,
+#: OYO, OLA, MMT, CCD, TDS, GST, MCX, IGL, MGL, DJB, D2H - i.e. most of the
+#: brands an Indian SMS actually names, most of them one or two words long.
+_MIN_KEY_LEN = 3
+#: Two-character keys are only matched when they are unambiguous in an SMS
+#: context. 6E is IndiGo's airline code and shows up as "6E 234" in bookings.
+_SHORT_KEY_ALLOW = frozenset({"6E", "PW"})
+
+
+def matchable(key: str) -> bool:
+    """True when ``lookup`` will consider this key at all."""
+    return len(key) >= _MIN_KEY_LEN or key in _SHORT_KEY_ALLOW
 
 
 def normalize_key(raw: str) -> str:
@@ -103,7 +116,7 @@ class MerchantDictionary:
             # then the larger catalog; both are "seed" strength.
             for raw, clean, category in (*SEED_MERCHANTS, *iter_seed_rows()):
                 key = normalize_key(raw)
-                if key in existing or len(key) < _MIN_KEY_LEN:
+                if key in existing or not matchable(key):
                     continue
                 existing.add(key)
                 rows.append((key, clean, category, "seed", now))
@@ -126,7 +139,7 @@ class MerchantDictionary:
             best: MerchantMatch | None = None
             for row in conn.execute("SELECT raw_key, clean_name, category, source FROM merchant_dictionary"):
                 key = row["raw_key"]
-                if len(key) < _MIN_KEY_LEN or f" {key} " not in haystack:
+                if not matchable(key) or f" {key} " not in haystack:
                     continue
                 base = {"user": 0.97, "seed": 0.9, "vpa": 0.86}.get(row["source"], 0.8)
                 score = base - min(0.12, len(key) / 400)  # prefer longer, more specific keys

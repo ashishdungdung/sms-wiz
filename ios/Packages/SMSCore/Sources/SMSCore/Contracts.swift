@@ -52,6 +52,7 @@ public enum LedgerTreatment: String, CaseIterable, Codable, Sendable {
     case instrumentLoad = "instrument_load"
     case cashWithdrawal = "cash_withdrawal"
     case investment = "investment"
+    case foreignCurrency = "foreign_currency"
     case none = "none"
 
     /// Only these two ever move the spend / income ring.

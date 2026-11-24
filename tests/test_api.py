@@ -109,8 +109,18 @@ class TestFilterEndpoint:
         ).json()
         assert scam["action"] == "junk"
 
-    def test_missing_body_is_rejected(self, client):
-        assert client.post("/api/v1/filter", json={"sender": "123"}).status_code == 400
+    def test_missing_body_fails_open(self, client):
+        """The extension must always get an actionable answer.
+
+        A 4xx tells iOS "this filter is broken", which is how a message ends up
+        unfiltered *and* unreported. `allow` changes nothing about the inbox, so
+        it is the only safe answer when there is nothing to read.
+        """
+        response = client.post("/api/v1/filter", json={"sender": "123"})
+        assert response.status_code == 200
+        assert response.json()["action"] == "allow"
+        assert response.json()["subAction"] == "none"
+        assert "reason" in response.json()
 
     def test_capabilities_are_within_apple_limits(self, client):
         caps = client.get("/api/v1/apple/capabilities").json()

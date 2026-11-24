@@ -29,7 +29,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 #: Treatments that never enter spend but *are* real money leaving an account.
 #: ``none`` is absent on purpose: a promotion or a due notice has no money in
 #: it, so adding its amount to "excluded" would invent ₹5,00,000 of movement.
-NON_SPEND_TREATMENTS = {"internal_transfer", "instrument_load", "cash_withdrawal", "investment"}
+NON_SPEND_TREATMENTS = {
+    "internal_transfer",
+    "instrument_load",
+    "cash_withdrawal",
+    "investment",
+    "foreign_currency",
+}
 
 
 # --------------------------------------------------------------------------

@@ -704,9 +704,17 @@ def coverage() -> dict[str, object]:
     # Investments), so the check spans both rather than pretending one is the
     # whole list.
     demat_brands = brands_in("Brokerage & Demat") | brands_in("Investments")
+    from .merchants import matchable, normalize_key  # local: merchants imports catalog
+
+    normalised = {normalize_key(raw) for raw, _clean, _label in iter_seed_rows()}
     return {
         "categories": len(CATEGORIES),
         "keys": merchant_count(),
+        # The dictionary stores normalised keys, so "Swiggy" and "SWIGGY FOOD"
+        # collapse. Report the number a user can actually match against, not the
+        # number of lines in the source table.
+        "distinct_keys": len(normalised),
+        "matchable_keys": sum(1 for key in normalised if matchable(key)),
         "duplicate_keys": len(duplicate_keys()),
         "brands": len({clean for _raw, clean, _slug in iter_seed_rows()}),
         "by_category": dict(sorted(by_category.items(), key=lambda kv: -kv[1]["brands"])),

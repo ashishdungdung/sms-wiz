@@ -28,6 +28,7 @@ from .models import (
     Institution,
     Intent,
     Ledger,
+    LedgerTreatment,
     LogisticsInfo,
     Merchant,
     OtpInfo,
@@ -244,6 +245,51 @@ CREDIT_VERBS = re.compile(
     r"\b(?:credited|credit|received|refunded|reversed|deposited|salary|cashback|cr\b)\b",
     re.IGNORECASE,
 )
+#: Something moved *and is finished*. "Rs 5,000 credited to A/c" is money;
+#: "OTP for a transfer of Rs 5,000" is not, even though both name an amount.
+COMPLETED_MOVEMENT = re.compile(
+    r"\b(?:has\s+been|have\s+been|was|were|been)?\s*"
+    r"(?:debited|credited|withdrawn|deposited|deducted|transferred|paid|received|reversed|refunded)\b",
+    re.IGNORECASE,
+)
+_FUTURE_MOVEMENT = re.compile(
+    r"\b(?:will|would|shall|is\s+going\s+to)\s+be\s+"
+    r"(?:debited|deducted|charged|presented|paid)\b",
+    re.IGNORECASE,
+)
+_ACCOUNT_MARKER = re.compile(r"\b(?:a/c|acct|account|xx\d{4}|\*{2,}\d{4}|card\s+\S*\d{4})\b", re.IGNORECASE)
+_DECLINED = re.compile(
+    r"\b(?:declined|failed|unsuccessful|not\s+processed|could\s+not\s+be\s+processed|rejected)\b",
+    re.IGNORECASE,
+)
+
+
+_BOOKING_LANGUAGE = re.compile(r"\b(?:booked|booking\s+confirmed|ticket|reservation)\b", re.IGNORECASE)
+
+
+def _money_already_moved(lower: str, amount: object, pnr: Optional[str] = None) -> bool:
+    """True when the message reports a *finished* movement of money.
+
+    Used to keep money rules ahead of travel/logistics/OTP: a delivery notice
+    that also says "Rs 250 debited to SWIGGY" is a payment, and a filter that
+    files it as logistics silently drops ₹250 from the ledger.
+
+    Two exceptions, both deliberate:
+
+    * a future movement ("will be debited") has not happened yet;
+    * a booking confirmation that names a PNR is the ticket record. Its fare was
+      charged by the payment message, and treating it as spending here would
+      double count the trip.
+    """
+    if amount is None:
+        return False
+    if _FUTURE_MOVEMENT.search(lower):
+        return False
+    if not COMPLETED_MOVEMENT.search(lower):
+        return False
+    if _ACCOUNT_MARKER.search(lower):
+        return True
+    return not (pnr and _BOOKING_LANGUAGE.search(lower))
 
 DOMAIN_BY_INTENT: dict[Intent, str] = {
     Intent.EXPENSE: "finance",
@@ -361,14 +407,31 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
         evidence.append("message reports a card bill payment")
         return Intent.CC_BILL_PAYMENT, 0.85, evidence, flags
 
-    # 3. Refunds -----------------------------------------------------------
-    if re.search(r"\brefund\b|\breversal\b", lower):
+    # 3. Refunds and reversals ---------------------------------------------
+    if re.search(r"\brefund\b|\brevers(?:al|ed|e)\b", lower):
         if _any(REFUND_INITIATED_PATTERNS, lower):
             evidence.append("refund promised but not yet confirmed")
             return Intent.REFUND_INITIATED, 0.8, evidence, flags
         if _any(REFUND_CREDITED_PATTERNS, lower):
             evidence.append("refund credited")
             return Intent.REFUND_CREDITED, 0.85, evidence, flags
+        # A reversal is money coming back, not new spending and not income: the
+        # ₹500 debit may already be in the ledger from its own message, and
+        # counting this one as a second expense (or as salary-like income)
+        # bends both totals. Whether it already happened decides the intent:
+        # "will be reversed" is a promise, "has been reversed" is a credit.
+        if re.search(r"\brevers(?:al|ed|e)\b", lower):
+            pending = re.search(
+                r"\b(?:will|shall|being|would|expected)\b|\bwithin\s+\d+\s+(?:\w+\s+)?days?\b",
+                lower,
+            )
+            flags.append("reversal_pending" if pending else "reversal")
+            evidence.append(
+                "reversal promised, not yet credited" if pending else "transaction reversed: money returned"
+            )
+            return (
+                (Intent.REFUND_INITIATED, 0.72) if pending else (Intent.REFUND_CREDITED, 0.75)
+            ) + (evidence, flags)
 
     # 3.5 Demat: dividends, IPO, corporate actions, order executions --------
     # These describe shares, not rupees. Checked before generic money language
@@ -400,14 +463,15 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
     # 4. Travel and logistics (before OTP: handover codes are not auth OTPs) --
     # A ticket is a booking, a parcel is a delivery, and the two must not be
     # mixed: one is retained until the journey, the other is dead on arrival.
+    money_moved = _money_already_moved(lower, amount, ctx.pnr)
     is_travel = _any(TRAVEL_PATTERNS, lower)
-    if is_travel and not TRACKING_ONLY.search(lower):
+    if is_travel and not TRACKING_ONLY.search(lower) and not money_moved:
         mode_hit = next((mode for mode, pat in TRAVEL_MODE_PATTERNS if re.search(pat, lower)), "other")
         evidence.append(f"travel booking ({mode_hit})" + (f" / PNR {ctx.pnr}" if ctx.pnr else ""))
         return Intent.TRAVEL, 0.88 if ctx.pnr else 0.8, evidence, flags
 
     is_status = _any(LOGISTICS_PATTERNS, lower)
-    if ctx.pnr or ctx.tracking or is_status or ctx.handover:
+    if (ctx.pnr or ctx.tracking or is_status or ctx.handover) and not money_moved:
         handover_ok = bool(ctx.handover and DELIVERY_CONTEXT.search(ctx.text) and not AUTH_CONTEXT.search(ctx.text))
         if ctx.pnr or ctx.tracking or is_status or handover_ok:
             if ctx.handover and handover_ok:
@@ -416,9 +480,15 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
             return Intent.LOGISTICS, 0.85 if (ctx.pnr or ctx.tracking) else 0.72, evidence, flags
 
     # 5. OTP ---------------------------------------------------------------
-    if ctx.otp:
+    if ctx.otp and not money_moved:
         evidence.append(f"OTP keyword '{ctx.otp[1]}' with a nearby code")
         return Intent.OTP, 0.9, evidence, flags
+    if ctx.otp and money_moved:
+        # "Rs 5,000 credited to A/c XX4092. Do not share OTP 482913." The money
+        # really moved, so it belongs in the ledger; the OTP is still treated as
+        # a secret (masked in storage, never sent anywhere).
+        evidence.append("OTP warning alongside a completed money movement")
+        flags.append("otp_present")
 
     # 6. FASTag ------------------------------------------------------------
     if re.search(r"\bfastag\b", lower):
@@ -890,6 +960,12 @@ def analyse(
             credit_limit_after=ctx.credit_limit,
         )
 
+    if amount is not None and amount.value <= 0:
+        # "Rs 0.00 debited" is a system message, not a payment. Keeping it as a
+        # zero-rupee expense just clutters the ledger.
+        amount = None
+        flags.append("zero_amount")
+
     if evidence_hint:
         evidence.append(evidence_hint)
 
@@ -908,6 +984,21 @@ def analyse(
         evidence=evidence,
         flags=flags,
     )
+
+    # A declined or failed transaction moved nothing. Saying so explicitly is
+    # better than an "expense" of money that never left the account.
+    if (
+        event.intent in {Intent.EXPENSE, Intent.UNKNOWN}
+        and _DECLINED.search(ctx.lower)
+        and not re.search(r"\b(?:reversed|refunded|declined\s+fee)\b", ctx.lower)
+    ):
+        event.evidence.append("transaction was declined: no money moved")
+        event.flags.append("declined_transaction")
+        event.intent = Intent.UNKNOWN
+        event.domain = DOMAIN_BY_INTENT.get(Intent.UNKNOWN, "other")
+        event.amount = None
+        event.ledger = Ledger.for_intent(Intent.UNKNOWN)
+        event.confidence = Confidence.from_score(min(event.confidence.score, 0.45))
 
     # ---- intent-specific enrichment -------------------------------------
     extra = ""
@@ -963,9 +1054,25 @@ def analyse(
         mode = next((m for m, pat in TRAVEL_MODE_PATTERNS if re.search(pat, ctx.lower)), "other")
         provider = next((name for name, pat in TRAVEL_PROVIDERS if re.search(pat, ctx.lower)), None)
         origin, destination = _route(text)
+        travel_status = "confirmed"
+        for keyword, label in (
+            ("cancelled", "cancelled"),
+            ("canceled", "cancelled"),
+            ("delayed", "delayed"),
+            ("late by", "delayed"),
+            ("rescheduled", "rescheduled"),
+            ("diverted", "diverted"),
+            ("chart prepared", "chart_prepared"),
+            ("waitlist", "waitlisted"),
+            ("wl", "waitlisted"),
+            ("confirmed", "confirmed"),
+        ):
+            if re.search(rf"\b{re.escape(keyword)}\b", ctx.lower):
+                travel_status = label
+                break
         event.logistics = LogisticsInfo(
             mode=mode,  # type: ignore[arg-type]
-            status="cancelled" if re.search(r"\bcancell?ed\b", ctx.lower) else "confirmed",
+            status=travel_status,
             provider=provider or (merchant.clean if merchant else None),
             pnr=ctx.pnr,
             journey_number=extract.find_journey(text),
@@ -1065,6 +1172,27 @@ def analyse(
         extra = kind
 
     event.ledger = Ledger.for_intent(intent)
+    if (
+        event.amount is not None
+        and event.amount.currency.upper() != "INR"
+        and event.ledger.treatment in {LedgerTreatment.EXPENSE, LedgerTreatment.INCOME}
+    ):
+        # A foreign-currency swipe is real spending, but the rupee figure is not
+        # in the message. Keeping the face value would put ₹12.99 in the ledger
+        # for a $12.99 charge.
+        event.ledger = Ledger(
+            treatment=LedgerTreatment.FOREIGN_CURRENCY,
+            counts_toward_spend=False,
+            counts_as_income=False,
+            reduces_spend=False,
+            reason=(
+                f"amount is in {event.amount.currency}; the rupee value is unknown until "
+                "the bank posts the conversion"
+            ),
+        )
+        event.flags.append("foreign_currency")
+        flags.append("foreign_currency")
+        evidence.append(f"foreign-currency amount ({event.amount.currency}); kept out of rupee totals")
     normalised = normalize_text(body)
     event.analysis = {
         # Which Indian scripts the message used, and how many phrases we had to
@@ -1100,6 +1228,12 @@ def analyse(
         rationale=route.rationale,
     )
     event.confidence = Confidence.from_score(score)
+    if event.ledger.treatment is LedgerTreatment.FOREIGN_CURRENCY:
+        event.confidence = Confidence(
+            score=min(score, 0.45),
+            band="low",
+            needs_review=True,
+        )
     event.dedup = DedupInfo()
 
     redaction = redact(

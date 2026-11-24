@@ -77,3 +77,49 @@ def redact(text: str, otp: str | None = None, codes: tuple[str, ...] = ()) -> Re
 
     result.text = text
     return result
+
+
+# --------------------------------------------------------------------------
+# Storage redaction
+# --------------------------------------------------------------------------
+
+#: 13-19 digits, optionally in 4-digit groups: card numbers and long account
+#: numbers. Shorter digit runs are references (AWB, UTR) and must survive, or the
+#: ledger loses the key it deduplicates on.
+_LONG_CARD_RE = re.compile(r"\b(?:\d[ -]?){12,18}\d\b")
+_CVV_RE = re.compile(r"\b(?:cvv|cvc|card\s+verification)\b[^0-9\n]{0,6}(\d{3,4})\b", re.IGNORECASE)
+#: A bare "PIN 1234" is a PIN: bank templates write it that way ("Use CVV 987 and
+#: PIN 1234"). "PIN code" is a postal code, so it is excluded explicitly.
+_PIN_RE = re.compile(
+    r"\b(?:atm\s+pin|upi\s+pin|login\s+pin|card\s+pin|pin)(?!\s*code)\b[^0-9\n]{0,6}(\d{4,6})\b",
+    re.IGNORECASE,
+)
+
+
+def for_storage(text: str, otp: str | None = None) -> str:
+    """Mask the things that must not sit in a database or a JSON payload.
+
+    Everything here is *single-use*: an OTP, a CVV, a card number, a PAN, a PIN.
+    The amount, the merchant, the VPA and the reference are kept verbatim on
+    purpose — they are the audit trail, and an app that rewrites them cannot
+    explain itself later. Unlike :func:`redact`, this is not for sending text to
+    a model; it is for the local store and the API that serves it.
+    """
+    if not text:
+        return text
+
+    if otp:
+        text = re.sub(rf"(?<!\d){re.escape(otp)}(?!\d)", "<otp>", text)
+
+    text = _CVV_RE.sub("cvv <cvv>", text)
+    text = _PIN_RE.sub(lambda m: m.group(0).replace(m.group(1), "<pin>"), text)
+    text = _PAN_RE.sub("<pan>", text)
+
+    def _card(match: re.Match[str]) -> str:
+        digits = re.sub(r"\D", "", match.group(0))
+        if len(digits) < 13:
+            return match.group(0)
+        return "*" * (len(digits) - 4) + digits[-4:]
+
+    text = _LONG_CARD_RE.sub(_card, text)
+    return text

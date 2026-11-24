@@ -77,6 +77,11 @@ class LedgerTreatment(str, Enum):
     INSTRUMENT_LOAD = "instrument_load"
     CASH_WITHDRAWAL = "cash_withdrawal"
     INVESTMENT = "investment"
+    #: The message is money, but not in rupees. Counting "USD 12.99" as ₹12.99
+    #: would understate a card bill by a factor of ~87, so it is excluded from
+    #: the rupee totals and surfaced for review until the bank posts the
+    #: converted amount in its own SMS.
+    FOREIGN_CURRENCY = "foreign_currency"
     NONE = "none"
 
 
@@ -479,6 +484,8 @@ class FilterQuery(BaseModel):
 class FilterResponse(BaseModel):
     action: AppleAction
     subAction: AppleSubAction = AppleSubAction.NONE
+    #: Only present when the answer is a fallback rather than a decision.
+    reason: Optional[str] = None
 
 
 class MonthSummary(BaseModel):

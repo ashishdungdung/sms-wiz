@@ -13,6 +13,7 @@ PY      ?= ./.venv/bin/python
 PIP     ?= ./.venv/bin/pip
 PYTHON  ?= python3
 PORT    ?= 8000
+HOST    ?= 127.0.0.1
 
 .DEFAULT_GOAL := help
 .PHONY: help install test demo serve contracts verify swift-test check clean skills
@@ -35,8 +36,8 @@ test: ## Run the pytest suite
 demo: ## 14 Indian edge cases, end to end (deterministic, no network)
 	$(PY) -m sms_wiz.cli demo
 
-serve: ## FastAPI on 0.0.0.0:$(PORT) — landing page at /
-	$(PY) -m sms_wiz.cli serve --port $(PORT)
+serve: ## FastAPI on 127.0.0.1:$(PORT) — landing page at /  (use HOST=0.0.0.0 to expose)
+	$(PY) -m sms_wiz.cli serve --host $(HOST) --port $(PORT)
 
 contracts: ## Regenerate contracts/ from sms_wiz/models.py
 	$(PY) scripts/export_contracts.py

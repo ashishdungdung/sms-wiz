@@ -39,8 +39,8 @@ claims otherwise is selling you a feature iOS will not run.
 python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 
 ./.venv/bin/python -m sms_wiz.cli demo          # 39 Indian edge cases, end to end
-./.venv/bin/python -m sms_wiz.cli serve         # API on http://0.0.0.0:8000  (/docs for OpenAPI)
-./.venv/bin/python -m pytest                    # 426 tests
+./.venv/bin/python -m sms_wiz.cli serve         # API on http://127.0.0.1:8000  (/docs for OpenAPI)
+./.venv/bin/python -m pytest                    # 467 tests
 
 # or, without remembering any of the above:
 make install && make demo && make verify
@@ -122,7 +122,7 @@ separately on purpose: `HDFCBK` and `HDFCCR` are one bank, not two.
 | Mobile carriers | 4 | `catalog.MOBILE_OPERATORS` (Airtel, Jio, Vi, BSNL) |
 | Broadband / DTH / ISP brands | 22 | `Mobile & Broadband` category |
 | Market infrastructure | 5 | NSE, BSE, MCX, CDSL, NSDL |
-| Merchant brands | 333 | over 753 dictionary keys, 21 categories |
+| Merchant brands | 333 | over 753 declared keys (716 after normalising), 21 categories |
 | Message templates | 59 | 17 bank names + generic bank/card/broker/travel/telco/utility + FASTag/IRCTC |
 | Intents | 26 | all 26 routed to an Apple folder |
 | Offline filter rules | 34 | 10 junk, 16 transaction, 8 promotion |
@@ -175,7 +175,9 @@ textually by `scripts/verify_contracts.py`, but no Xcode build has run here.
 | `GET` | `/api/v1/apple/capabilities` | the sub-actions to declare (≤5 per group) |
 | `GET` | `/health` | db path, merchant count, whether the LLM is on |
 
-Set `SMSWIZ_TOKEN` to require `X-SMSWiz-Token` on the two write endpoints.
+Set `SMSWIZ_TOKEN` to require `X-SMSWiz-Token` on **every** `/api/v1/*` route, reads
+included — the stored rows are a bank statement. `/` and `/health` stay open so the
+phone can find the server before it has a token.
 
 ---
 
@@ -214,7 +216,9 @@ Read in this order:
    test that tells you whether the Shortcuts bridge exposes message bodies on
    your iOS version.
 2. `docs/schema.md` — the event model, ledger table and routing rules.
-3. `ios/README.md` — wiring the extension, the App Group, the associated domain.
+3. `docs/review.md` — what three adversarial probes broke, what was fixed, and
+   what was deliberately left alone (with the test that pins each fix).
+4. `ios/README.md` — wiring the extension, the App Group, the associated domain.
 
 ---
 
@@ -283,9 +287,9 @@ sms_wiz/
 scripts/         export_contracts.py (generate), verify_contracts.py (parity gate)
 contracts/       generated schema + enums, plus fixtures both languages replay
 .agents/skills/  six step-by-step procedures for changes this repo gets
-tests/           426 tests
+tests/           467 tests
 ios/             reference Swift (filter extension, App Intent, models)
-docs/            iOS constraints, schema, filter-rule syntax, fixture guide
+docs/            iOS constraints, schema, filter-rule syntax, review findings
 ```
 
 ---

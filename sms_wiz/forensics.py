@@ -34,6 +34,7 @@ IMPERSONATION_TARGETS: tuple[str, ...] = (
     "INCOME TAX", "ITR", "EPFO", "UIDAI", "AADHAAR", "PASSPORT", "BESCOM", "MSEDCL",
     "IRCTC", "INDIGO", "LIC", "GST", "NETFLIX", "DELHIVERY", "BLUEDART", "TELECOM",
     "JIO", "AIRTEL", "VODAFONE",
+    "CDSL", "NSDL", "ZERODHA", "GROWW", "UPSTOX", "ANGEL ONE", "NSE", "BSE",
 )
 
 #: Language that shows up in coercive scam texts.
@@ -45,6 +46,9 @@ THREAT_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\b(?:click|tap|open)\s+(?:here|this link|below)\b", "pushes a link tap"),
     (r"\b(?:verify|confirm|update)\s+(?:your\s+)?(?:details|account|card|kyc)\b", "asks to verify credentials"),
     (r"\bapk\b", "asks for an app install"),
+    (r"\b(?:pan|aadhaar|aadhar)\b.{0,25}\b(?:update|link|verify|seed)\b", "asks to update PAN/Aadhaar"),
+    (r"\bdemat\b.{0,30}\b(?:frozen|freeze|blocked|suspend)", "threatens to freeze a demat account"),
+    (r"\b(?:account|a/c)\b.{0,20}\bwill\s+be\s+(?:frozen|closed)\b", "threatens to freeze the account"),
     (r"\b(?:lucky\s+winner|lottery|prize\s+of|crore\s+winner)\b", "lottery bait"),
     (r"\b(?:whatsapp|telegram|call)\s+(?:on\s+)?(?:\+?91[\s-]?)?[6-9]\d{9}\b", "pushes contact to a personal number"),
 )
@@ -64,7 +68,14 @@ class ForensicReport:
         self.reasons.append(reason)
 
 
+#: A VPA (``swiggy@icici``) names the *payee's PSP*, not the sender's brand. Left
+#: in place it makes every ICICI-handle UPI payment look like a brand conflict.
+_VPA_IN_TEXT = re.compile(r"\b[A-Za-z0-9.\-_]{2,}@[A-Za-z][A-Za-z0-9.\-]{2,}\b")
+_URL_IN_TEXT = re.compile(r"\b(?:https?://|www\.)\S+", re.IGNORECASE)
+
+
 def _brand_mentions(text: str) -> list[str]:
+    text = _URL_IN_TEXT.sub(" ", _VPA_IN_TEXT.sub(" ", text))
     upper = text.upper()
     found: list[str] = []
     for target in IMPERSONATION_TARGETS:
@@ -149,6 +160,10 @@ def analyse(text: str, sender: SenderInfo) -> ForensicReport:
             report.add(0.15, f"throwaway top-level domain ({domain})")
         if entity is None:
             report.add(0.05, f"link domain {domain} is not a domain we know")
+        if official_domains and domain not in official_domains and entity is None:
+            # The header says HDFC Bank; the link is not hdfcbank.com. Banks link
+            # to their own properties, so this is worth flagging on its own.
+            report.add(0.2, f"link {domain} is not on {sender.display_name}'s official domain")
         for weight, reason in _url_depth_signals(url, domain):
             report.add(weight, reason)
 

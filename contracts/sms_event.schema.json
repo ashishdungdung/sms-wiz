@@ -345,6 +345,7 @@
         "instrument_load",
         "cash_withdrawal",
         "investment",
+        "foreign_currency",
         "none"
       ],
       "title": "LedgerTreatment",

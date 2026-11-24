@@ -14,11 +14,13 @@ from unknown senders, with the one message body it is deciding about.
 
 from __future__ import annotations
 
+import hmac
 import os
+import re
 from typing import Any, Optional
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import analytics, cards, notify, rules, subscriptions, templates
 from .catalog import CATEGORIES as CATEGORY_TAXONOMY
@@ -49,9 +51,36 @@ from .store import (
 DEFAULT_DB = os.environ.get("SMSWIZ_DB", "sms_wiz.db")
 
 
+_MONTH_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+
+
+def _check_month(month: Optional[str]) -> Optional[str]:
+    """A month is ``YYYY-MM``. Silently returning an empty list for ``2026-13``
+    looks like "you spent nothing", which is a lie a ledger must not tell."""
+    if month is None:
+        return None
+    if not _MONTH_RE.match(month):
+        raise HTTPException(status_code=422, detail=f"month must be YYYY-MM, got {month!r}")
+    return month
+
+
+def _expected_token() -> Optional[str]:
+    return os.environ.get("SMSWIZ_TOKEN") or None
+
+
+def _token_ok(token: Optional[str]) -> bool:
+    expected = _expected_token()
+    if not expected:
+        return True
+    if not token:
+        return False
+    # Constant-time: a shared secret compared with == leaks its prefix length
+    # through timing, which is enough to guess it one character at a time.
+    return hmac.compare_digest(token, expected)
+
+
 def _check_token(token: Optional[str]) -> None:
-    expected = os.environ.get("SMSWIZ_TOKEN")
-    if expected and token != expected:
+    if not _token_ok(token):
         raise HTTPException(status_code=401, detail="invalid or missing X-SMSWiz-Token")
 
 
@@ -76,7 +105,7 @@ def _filter_payload(payload: dict[str, Any]) -> tuple[str, str]:
         )
         if body:
             return str(sender), str(body)
-    raise HTTPException(status_code=400, detail="no message body found in payload")
+    return "", ""
 
 
 def create_app(db_path: Optional[str] = None) -> FastAPI:
@@ -95,6 +124,27 @@ def create_app(db_path: Optional[str] = None) -> FastAPI:
 
     def conn():
         return connect(db)
+
+    @app.middleware("http")
+    async def require_token(request, call_next):
+        """One gate for the whole API.
+
+        The token used to be checked handler by handler, which meant every new
+        read endpoint was unauthenticated until somebody remembered. The data
+        behind these routes is a bank statement: amounts, merchants, balances.
+        ``/`` (the landing page) and ``/health`` stay open so the phone can find
+        the server before it has a token.
+        """
+        path = request.url.path
+        if (
+            path.startswith("/api/")
+            and request.method != "OPTIONS"
+            and not _token_ok(request.headers.get("x-smswiz-token"))
+        ):
+            return JSONResponse(
+                {"detail": "invalid or missing X-SMSWiz-Token"}, status_code=401
+            )
+        return await call_next(request)
 
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -205,6 +255,15 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         """Answer Apple's network-deferral query. Keep it tiny and fast."""
         _check_token(x_sms_wiz_token)
         sender, body = _filter_payload(payload)
+        if not body.strip():
+            # Apple's extension must always get an answer it can act on. A 4xx
+            # here means the filter silently stops filtering; `allow` is the safe
+            # default because it changes nothing about the user's inbox.
+            return FilterResponse(
+                action=AppleAction.ALLOW,
+                subAction=AppleSubAction.NONE,
+                reason="no message body in the request; allowed rather than misfiled",
+            ).model_dump()
         # Fast path: issuer-authored rules answer most folder decisions without
         # touching the full chain. The chain still runs on ingest, where it is
         # authoritative; this only has to beat Apple's deadline.
@@ -215,24 +274,28 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
             sender_kind=sender_info.entity_kind.value,
         )
         if verdict is not None:
-            return FilterResponse(action=verdict.action, subAction=verdict.sub_action).model_dump()
+            return FilterResponse(action=verdict.action, subAction=verdict.sub_action).model_dump(
+                exclude_none=True
+            )
 
         event = analyse(body, sender, merchants=merchants, source="filter")
         return FilterResponse(
             action=event.routing.apple_action,
             subAction=event.routing.apple_subaction,
-        ).model_dump()
+        ).model_dump(exclude_none=True)
 
     @app.get("/api/v1/events")
     def events(
-        limit: int = Query(default=50, le=500),
+        limit: int = Query(default=50, ge=1, le=500),
         month: Optional[str] = None,
         needs_review: Optional[bool] = None,
         intent: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         c = conn()
         try:
-            return list_events(c, limit=limit, month=month, needs_review=needs_review, intent=intent)
+            return list_events(
+                c, limit=limit, month=_check_month(month), needs_review=needs_review, intent=intent
+            )
         finally:
             c.close()
 
@@ -306,7 +369,7 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         """
         c = conn()
         try:
-            rows = list_events(c, limit=500, month=month)
+            rows = list_events(c, limit=500, month=_check_month(month))
         finally:
             c.close()
         buckets: dict[str, dict[str, Any]] = {}
@@ -382,7 +445,7 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
     @app.get("/api/v1/overview")
     def overview(month: Optional[str] = None) -> dict[str, Any]:
         """One call for the home screen: month, weeks, trend, UPI, cards, top merchants."""
-        return analytics.overview(_rows(), month=month)
+        return analytics.overview(_rows(), month=_check_month(month))
 
     @app.get("/api/v1/analytics/weekly")
     def analytics_weekly(weeks: int = Query(default=8, ge=1, le=52)) -> list[dict[str, Any]]:
@@ -394,6 +457,7 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
 
     @app.get("/api/v1/analytics/upi")
     def analytics_upi(month: Optional[str] = None) -> dict[str, Any]:
+        month = _check_month(month)
         rows = _rows()
         if month:
             rows = [r for r in rows if str(r.get("received_at", "")).startswith(month)]
@@ -480,6 +544,15 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         """
         _check_token(x_sms_wiz_token)
         sender, body = _filter_payload(payload)
+        if not body.strip():
+            # Apple's extension must always get an answer it can act on. A 4xx
+            # here means the filter silently stops filtering; `allow` is the safe
+            # default because it changes nothing about the user's inbox.
+            return FilterResponse(
+                action=AppleAction.ALLOW,
+                subAction=AppleSubAction.NONE,
+                reason="no message body in the request; allowed rather than misfiled",
+            ).model_dump()
         event = analyse(body, sender, merchants=merchants, source="filter")
         verdict = rules.evaluate(sender, body, sender_kind=event.sender.entity_kind.value)
         return {

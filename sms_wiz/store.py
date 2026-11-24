@@ -11,11 +11,13 @@ Ledger invariants enforced here (not in SQL, so they stay readable):
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
-from .models import Alert, Intent, LedgerTreatment, MonthSummary, SmsEvent
+from .models import Alert, EntityKind, Intent, LedgerTreatment, MonthSummary, SmsEvent
+from .redact import for_storage
 
 MONEY_TREATMENTS = {
     LedgerTreatment.EXPENSE.value,
@@ -25,6 +27,7 @@ MONEY_TREATMENTS = {
     LedgerTreatment.INSTRUMENT_LOAD.value,
     LedgerTreatment.CASH_WITHDRAWAL.value,
     LedgerTreatment.INVESTMENT.value,
+    LedgerTreatment.FOREIGN_CURRENCY.value,
 }
 
 
@@ -32,8 +35,29 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def safe_body(event: SmsEvent) -> str:
+    """The body as it is allowed to be stored: secrets masked, everything else kept.
+
+    An OTP is single-use and worthless a minute later, but it is still a
+    credential. The database is on disk and `/api/v1/events` serves these rows,
+    so the code is replaced before either can see it. Amounts, merchants, VPAs
+    and references stay verbatim: they are the audit trail.
+    """
+    return for_storage(event.body, event.otp.code if event.otp else None)
+
+
 def save_event(conn: sqlite3.Connection, event: SmsEvent) -> None:
     payload = event.model_dump(mode="json")
+    body = safe_body(event)
+    if body != event.body:
+        payload["body"] = body
+        payload["body_redacted"] = True
+    if payload.get("otp"):
+        payload["otp"]["code"] = "<otp>"
     conn.execute(
         """
         INSERT OR REPLACE INTO events (
@@ -69,7 +93,7 @@ def save_event(conn: sqlite3.Connection, event: SmsEvent) -> None:
             event.dedup.status,
             event.dedup.duplicate_of,
             event.analysis.get("reference"),
-            event.body,
+            body,
             json.dumps(payload, ensure_ascii=False),
             _now(),
         ),
@@ -134,18 +158,39 @@ def _with_language(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def find_identical(
-    conn: sqlite3.Connection, sender_raw: str, body: str, day: str
+    conn: sqlite3.Connection,
+    sender_raw: str,
+    body: str,
+    day: str,
+    otp: Optional[str] = None,
+    within_minutes: int = 30,
+    at: Optional[datetime] = None,
 ) -> Optional[dict[str, Any]]:
-    """The same message from the same sender on the same day.
+    """The same message from the same sender, recently.
 
-    iOS re-delivers SMS through iCloud sync and provider duplicates; the second
-    copy is the same money. Exact text only — a paraphrase is a different
-    message and goes through the possible-duplicate path instead.
+    iOS re-delivers SMS through iCloud sync and providers, and the second copy is
+    the same money. Exact text only — a paraphrase is a different message and
+    goes through the possible-duplicate path instead.
+
+    The window matters. Two byte-identical messages hours apart are usually two
+    real transactions (two ₹100 coffees at the same shop, two ATM withdrawals on
+    the same evening), and suppressing those silently understates spend. A
+    re-delivery arrives within seconds or minutes, so only that is folded.
     """
+    # Measured from the message's own timestamp. ``created_at`` would be the
+    # import time, so a backfill of a year of SMS would fold every repeat
+    # purchase into one.
+    reference = at or _utcnow()
+    since = (reference - timedelta(minutes=within_minutes)).isoformat()
+    # Stored bodies are masked (see safe_body), so the comparison has to be made
+    # on the masked form too, or a re-delivered card or OTP message would slip
+    # through as new.
+    masked = for_storage(body, otp)
     row = conn.execute(
         "SELECT * FROM events WHERE sender_raw = ? AND body = ? AND substr(received_at, 1, 10) = ?"
-        " AND dedup_status != 'suppressed_duplicate' ORDER BY created_at ASC LIMIT 1",
-        (sender_raw, body, day),
+        " AND received_at >= ? AND dedup_status != 'suppressed_duplicate'"
+        " ORDER BY received_at ASC LIMIT 1",
+        (sender_raw, masked, day, since),
     ).fetchone()
     return dict(row) if row else None
 
@@ -165,11 +210,21 @@ def find_possible_duplicate(
     day: str,
     last4: Optional[str],
     sender_raw: str,
+    merchant: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
-    """Same amount, same day, different sender, overlapping instrument.
+    """Same amount, same day, different sender — plus a second signal.
 
-    This only *suggests* a link. Amount alone is never enough to merge two
-    transactions — two coffees on the same day are not the same coffee.
+    This only *suggests* a link; nothing is merged. Amount alone is never enough
+    — two ₹100 coffees on the same day are not the same coffee. Two signals are:
+
+    * the same instrument (``account_last4``): the same card reported by the bank
+      and by the card programme;
+    * the same merchant: a card spend at a shop and the bank debit that settles
+      it arrive from two institutions with two different account numbers, and
+      counting both inflates the month.
+
+    The returned dict carries ``match_kind`` (``instrument`` or ``merchant``) so
+    the caller can explain itself.
     """
     if last4:
         row = conn.execute(
@@ -178,9 +233,22 @@ def find_possible_duplicate(
             " ORDER BY created_at ASC LIMIT 1",
             (amount, day, last4, sender_raw),
         ).fetchone()
-    else:
-        row = None
-    return dict(row) if row else None
+        if row:
+            found = dict(row)
+            found["match_kind"] = "instrument"
+            return found
+    if merchant:
+        row = conn.execute(
+            "SELECT * FROM events WHERE amount_value = ? AND substr(received_at, 1, 10) = ?"
+            " AND merchant_clean = ? AND sender_raw != ? AND dedup_status != 'suppressed_duplicate'"
+            " ORDER BY created_at ASC LIMIT 1",
+            (amount, day, merchant, sender_raw),
+        ).fetchone()
+        if row:
+            found = dict(row)
+            found["match_kind"] = "merchant"
+            return found
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -212,6 +280,30 @@ def list_balances(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 
+def refund_merchant(event: SmsEvent) -> Optional[str]:
+    """The best merchant string available for a refund claim.
+
+    A claim message usually names a merchant the dictionary has never heard of
+    ("Refund initiated for ORDER 9912"). Storing ``None`` there left the tracker
+    with nothing to show and nothing to match a credit against, so the raw name
+    is kept when it at least looks like words rather than a reference number.
+    """
+    if event.merchant:
+        clean = (event.merchant.clean or "").strip()
+        if clean:
+            return clean
+        raw = (event.merchant.raw or "").strip()
+        if len(re.findall(r"[A-Za-z]{3,}", raw)) >= 1 and not re.fullmatch(r"[\d\W]+", raw):
+            return raw[:60]
+    # "Refund of Rs 900 for your order has been initiated" from Amazon names no
+    # merchant because the sender *is* the merchant. A bank or a telco is not:
+    # "refund from HDFC Bank" would be a claim against the wrong party.
+    sender = event.sender
+    if sender.entity_kind in (EntityKind.BRAND, EntityKind.FINTECH) and sender.display_name:
+        return sender.display_name
+    return None
+
+
 def open_refund(
     conn: sqlite3.Connection,
     event: SmsEvent,
@@ -223,14 +315,14 @@ def open_refund(
         "INSERT INTO refunds (merchant, amount, currency, instrument_last4, status, opened_at,"
         " deadline_at, opened_event_id, raw_sms) VALUES (?, ?, ?, ?, 'awaiting', ?, ?, ?, ?)",
         (
-            event.merchant.clean if event.merchant else None,
+            refund_merchant(event),
             event.amount.value if event.amount else 0.0,
             event.amount.currency if event.amount else "INR",
             (event.institution.account_last4 or event.institution.card_last4) if event.institution else None,
             opened.isoformat(),
             deadline.isoformat(),
             event.event_id,
-            event.body,
+            safe_body(event),
         ),
     )
     conn.commit()
@@ -248,17 +340,65 @@ def find_open_refund(conn: sqlite3.Connection, amount: float, merchant: Optional
         "SELECT * FROM refunds WHERE status = 'awaiting' AND abs(amount - ?) < 0.01 ORDER BY opened_at ASC",
         (amount,),
     ).fetchall()
+    # A promise that never stated a figure ("refund initiated for order 9912")
+    # is stored with amount 0. It can only be matched by merchant: an amount we
+    # do not know cannot be compared, and any credit would otherwise close it.
+    unknown = conn.execute(
+        "SELECT * FROM refunds WHERE status = 'awaiting' AND amount = 0 ORDER BY opened_at ASC"
+    ).fetchall()
+    rows = list(rows) + list(unknown)
     if not rows:
         return None, False
     if merchant:
+        wanted = merchant.strip().lower()
         for row in rows:
-            if row["merchant"] and row["merchant"].strip().lower() == merchant.strip().lower():
+            stored = (row["merchant"] or "").strip().lower()
+            if not stored:
+                continue
+            # "Amazon" and "Amazon Pay India" are the same shop; a claim stored
+            # from a raw merchant string rarely matches character for character.
+            if stored == wanted or (len(stored) >= 4 and stored in wanted) or (
+                len(wanted) >= 4 and wanted in stored
+            ):
                 return dict(row), False
         for row in rows:
-            if not row["merchant"]:
+            if not row["merchant"] and row["amount"] > 0:
                 return dict(row), False
         return None, True
     return dict(rows[0]), False
+
+
+def find_covering_refund(
+    conn: sqlite3.Connection,
+    amount: float,
+    merchant: Optional[str],
+    days: int = 45,
+    at: Optional[datetime] = None,
+) -> Optional[dict[str, Any]]:
+    """An open claim this credit is big enough to cover.
+
+    Refunds frequently do not arrive at the claimed figure: a partial refund, or
+    one credit for two returned orders (a ₹1,500 credit against a ₹500 claim).
+    Exact-amount matching leaves that claim hanging forever and files the credit
+    as "no claim", which is how a tracker stops being trusted.
+    """
+    # Measured from the credit's own timestamp, not the wall clock: importing a
+    # months-old SMS archive must not silently expire every claim.
+    reference = at or _utcnow()
+    since = (reference - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT * FROM refunds WHERE status = 'awaiting' AND amount <= ? AND opened_at >= ?"
+        " ORDER BY opened_at ASC",
+        (amount, since),
+    ).fetchall()
+    for row in rows:
+        stored = (row["merchant"] or "").strip().lower()
+        wanted = (merchant or "").strip().lower()
+        if not stored or not wanted:
+            continue
+        if stored in wanted or wanted in stored:
+            return dict(row)
+    return None
 
 
 def resolve_refund(conn: sqlite3.Connection, refund_id: int, event_id: str, at: str) -> None:
@@ -302,7 +442,7 @@ def save_voucher(conn: sqlite3.Connection, event: SmsEvent) -> bool:
             voucher.expiry.date().isoformat() if voucher.expiry else None,
             event.event_id,
             _now(),
-            event.body,
+            safe_body(event),
         ),
     )
     conn.commit()
