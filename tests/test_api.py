@@ -141,3 +141,27 @@ class TestAuth:
 
     def test_no_token_configured_means_open_local_dev(self, client):
         assert post_sms(client).status_code == 200
+
+
+class TestLanguageSurface:
+    """A Hindi message must stay visibly Hindi after it is stored."""
+
+    def test_event_list_reports_the_script(self, client):
+        hindi = (
+            "प्रिय ग्राहक, आपके खाते XX1094 से रु २,५००.०० को SWIGGY को डेबिट किए गए हैं "
+            "(UPI Ref ५१२३४५६७८९०१). उपलब्ध शेष: रु ८,२००.००"
+        )
+        assert post_sms(client, sender="VM-SBIN-T", body=hindi).status_code == 200
+
+        rows = client.get("/api/v1/events").json()
+        assert len(rows) == 1
+        assert rows[0]["scripts"] == ["devanagari"]
+        assert rows[0]["multilingual"] is True
+        assert rows[0]["amount_value"] == 2500.0
+        assert rows[0]["merchant_clean"] == "Swiggy"
+
+    def test_english_events_report_no_script(self, client):
+        post_sms(client)
+        rows = client.get("/api/v1/events").json()
+        assert rows[0]["scripts"] == []
+        assert rows[0]["multilingual"] is False

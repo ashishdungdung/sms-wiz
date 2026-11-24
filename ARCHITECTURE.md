@@ -17,14 +17,14 @@
   │            ▼                                                      │
   │   returns (action, subAction)  → Apple's fixed folders             │
   │                                                                   │
-  │   App / Shortcut / App Intent ──► /api/v1/ingest  (full event)     │
+  │   App / Shortcut / App Intent ──► /api/v1/ingest-sms (event)     │
   └───────────────────────────────────────────────────────────────────┘
                               │
                               ▼
   ┌───────────────────────────────────────────────────────────────────┐
   │ FastAPI  (sms_wiz/api.py)                                         │
   │   POST /api/v1/filter     → {action, subAction}  only, fails open  │
-  │   POST /api/v1/ingest     → full SmsEvent + alerts                 │
+  │   POST /api/v1/ingest-sms → full SmsEvent + alerts                 │
   │   GET  /api/v1/summary    → month buckets, zero-double-count view  │
   │   GET  /api/v1/vouchers · /refunds · /cleanup-queues · /review     │
   └───────────────────────────────────────────────────────────────────┘

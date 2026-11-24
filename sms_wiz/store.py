@@ -105,7 +105,23 @@ def list_events(
     rows = conn.execute(
         f"SELECT * FROM events {where} ORDER BY received_at DESC LIMIT ?", params
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [_with_language(dict(row)) for row in rows]
+
+
+def _with_language(row: dict[str, Any]) -> dict[str, Any]:
+    """Surface the scripts a message was written in.
+
+    The full analysis lives inside the stored ``payload``; the list view gets a
+    decoded copy so the app can say "read from Devanagari" without downloading
+    every event body.
+    """
+    try:
+        analysis = json.loads(row.get("payload") or "{}").get("analysis") or {}
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        analysis = {}
+    row["scripts"] = analysis.get("scripts", [])
+    row["multilingual"] = bool(analysis.get("multilingual"))
+    return row
 
 
 def find_by_reference(conn: sqlite3.Connection, reference: str) -> Optional[dict[str, Any]]:
