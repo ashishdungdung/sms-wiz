@@ -11,6 +11,13 @@ text:
 Plus `evidence` / `confidence` / `flags`, which are not decoration: the UI is
 supposed to show them.
 
+**This document is prose. The machine-readable contract is generated:**
+`contracts/sms_event.schema.json` and `contracts/enums.json` come from the model
+via `make contracts`, and `make verify` fails if the Swift mirror drifts. Accept
+cases live in `contracts/fixtures/` and are replayed through the whole pipeline
+(`tests/test_fixtures.py`). If this page and the generated schema disagree, the
+schema wins — then fix this page.
+
 ---
 
 ## Example

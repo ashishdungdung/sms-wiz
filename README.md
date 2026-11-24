@@ -5,8 +5,8 @@ SMS into a clean, explainable ledger — without double counting a rupee — and
 tells an iPhone which of Apple's message folders each message belongs in.
 
 ```
-   raw SMS ─► sender & link forensics ─► ordered rule chain ─► ledger + routing ─► alerts
-              (TRAI DLT, domains)        (zero double count)   (Apple folders)     (refunds, EMI)
+   raw SMS ─► script normalisation ─► sender & link forensics ─► ordered rule chain ─► ledger + routing ─► alerts
+              (9 Indian scripts)      (TRAI DLT, domains)        (zero double count)   (Apple folders)     (refunds, EMI)
 ```
 
 It runs as a small FastAPI service plus a CLI. The optional LLM layer is off by
@@ -40,7 +40,10 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 
 ./.venv/bin/python -m sms_wiz.cli demo          # 14 Indian edge cases, end to end
 ./.venv/bin/python -m sms_wiz.cli serve         # API on http://0.0.0.0:8000  (/docs for OpenAPI)
-./.venv/bin/python -m pytest                    # 120 tests
+./.venv/bin/python -m pytest                    # 171 tests
+
+# or, without remembering any of the above:
+make install && make demo && make verify
 ```
 
 Classify a single message without a server:
@@ -166,12 +169,51 @@ Read in this order:
 
 ---
 
+## Working on this in any IDE (the agent harness)
+
+The repo is built so Claude Code, Antigravity, DeepSeek, Zed, or a human with
+`vim` all have the same context and the same commands. No step requires the
+Xcode GUI.
+
+| File | Answers |
+| --- | --- |
+| `AGENTS.md` (`CLAUDE.md`, `.rules` → same file) | how to work here: non-negotiables, recipes, definition of done |
+| `PROJECT.md` | what we are building, what is out of scope, honest status labels |
+| `ARCHITECTURE.md` | data flow, layering, the seven-rule chain, money invariants |
+| `DESIGN.md` | what the user sees on an iPhone, and what iOS refuses to allow |
+| `LANGUAGE.md` | Indian finance vocabulary + the multilingual policy |
+| `.agents/skills/*/SKILL.md` | six procedures: classify, add entity, add language, change contract, ship iOS, debug ledger |
+| `contracts/` | generated schema/enums + 9 fixtures both languages replay |
+
+```bash
+make help        # every target
+make verify      # contracts current + Python/Swift parity + tests   <- the gate
+make swift-test  # real SMSCore tests (honest skip when no toolchain)
+```
+
+The contract is generated from the model, not written by hand:
+
+```
+sms_wiz/models.py ──► contracts/sms_event.schema.json + enums.json
+                              │
+        tests/test_contracts.py · scripts/verify_contracts.py ──► Swift enums
+                              │
+        contracts/fixtures/*.json  ← replayed by pytest and decoded by Swift
+```
+
+`scripts/verify_contracts.py` parses Swift **textually**, so drift is caught on
+Linux without Xcode. Fixtures run through the whole pipeline, which is why they
+also guard dedup, refunds, and balance alerts.
+
+---
+
 ## Repo layout
 
 ```
 sms_wiz/
   models.py      event schema + ledger rules
   registry.py    Indian sender IDs, brand domains, Apple routing table, seed merchants
+  normalize.py   Devanagari/Tamil/Telugu/... digits, rupee markers, phrases → ASCII
   extract.py     amounts, last4, references, dates, OTPs, URLs, PNRs, merchants
   forensics.py   DLT/sender/link mismatch scoring with named reasons
   classify.py    the ordered rule chain + enrichment
@@ -182,7 +224,10 @@ sms_wiz/
   store.py       SQLite queries + monthly rollup
   api.py         FastAPI surface
   cli.py         demo / serve / ingest / summary
-tests/           120 tests
+scripts/         export_contracts.py (generate), verify_contracts.py (parity gate)
+contracts/       generated schema + enums, plus fixtures both languages replay
+.agents/skills/  six step-by-step procedures for changes this repo gets
+tests/           171 tests
 ios/             reference Swift (filter extension, App Intent, models)
 docs/            iOS constraints, schema
 ```
@@ -191,6 +236,8 @@ docs/            iOS constraints, schema
 
 ## Roadmap
 
+- [x] Multilingual normalisation (digits, currency, phrases) with tests and a fixture.
+- [x] Generated contract + shared fixtures + Swift parity check without Xcode.
 - [ ] Share extension + clipboard import in the iOS app (the reliable paths).
 - [ ] Merchant dictionary review UI backed by `GET/POST /api/v1/merchants`.
 - [ ] Subscription calendar from pre-debit notices (detect, then compare).

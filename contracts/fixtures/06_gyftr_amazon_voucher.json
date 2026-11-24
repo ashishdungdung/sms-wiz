@@ -1,0 +1,18 @@
+{
+  "id": "gyftr_amazon_voucher",
+  "description": "Issued Amazon Pay gift card with code, PIN and expiry. Goes to the vault, not to spend.",
+  "input": {
+    "sender": "AD-AMAZON-S",
+    "received_at": "2025-03-01T14:00:00+05:30",
+    "body": "You have received a Rs 1,000 Amazon Pay gift card. Voucher code: AMZP-4K9Q-7T2X. PIN: 982104. Expires 30-Apr-2025."
+  },
+  "expect": {
+    "intent": "voucher_issued",
+    "apple_subaction": "transactionalRewards",
+    "counts_toward_spend": false,
+    "amount": 1000.0,
+    "alerts_include": [
+      "voucher_saved"
+    ]
+  }
+}

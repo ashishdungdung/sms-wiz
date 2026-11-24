@@ -18,6 +18,7 @@ from typing import Optional
 
 from . import extract, forensics
 from .merchants import MerchantDictionary
+from .normalize import normalize_text
 from .models import (
     Amount,
     Confidence,
@@ -680,7 +681,15 @@ def analyse(
         extra = kind
 
     event.ledger = Ledger.for_intent(intent)
+    normalised = normalize_text(body)
     event.analysis = {
+        # Which Indian scripts the message used, and how many phrases we had to
+        # translate before the rules could read it. Recording this is what makes
+        # multilingual support auditable instead of aspirational.
+        "scripts": normalised.scripts,
+        "digit_scripts": normalised.digit_scripts,
+        "translations": normalised.translations,
+        "multilingual": normalised.is_multilingual,
         "rail": _rail(ctx.lower),
         "reference": ctx.reference,
         "upi_rrn": ctx.rrn,

@@ -14,6 +14,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 from .models import EntityKind, SenderInfo
+from .normalize import normalize_text
 from .registry import ENTITIES_BY_CODE, SHORTENERS, SUSPICIOUS_TLDS
 
 # --------------------------------------------------------------------------
@@ -24,8 +25,13 @@ _WS = re.compile(r"\s+")
 
 
 def normalize(body: str) -> str:
-    """Collapse whitespace and make currency symbols matchable."""
-    text = body.replace("\u20b9", "Rs ").replace("\xa0", " ")
+    """Collapse whitespace, convert regional digits/currency, make text matchable.
+
+    Regional numerals must be translated *before* anything else: a UPI RRN
+    written in Devanagari has to deduplicate against the ASCII version that
+    PhonePe sent, or the ledger counts the same payment twice.
+    """
+    text = normalize_text(body.replace("\xa0", " ")).text
     return _WS.sub(" ", text).strip()
 
 
@@ -218,7 +224,7 @@ def find_amounts(text: str, skip_spans: tuple[tuple[int, int], ...] = ()) -> lis
 
 _LAST4_PATTERNS = (
     re.compile(
-        r"\b(?:a/?c|acct|account|card)\b(?:\s*(?:no\.?|number|#))?"
+        r"\b(?:a/?c|acct|account|card|खाता|खाते|கணக்கு|ఖాతా|ಖಾತೆ|ખાતું|অ্যাকাউন্ট)\b(?:\s*(?:no\.?|number|#))?"
         r"[^0-9A-Za-z\n]{0,25}?[Xx*]{1,}[^\d\n]{0,3}(\d{4})\b",
         re.IGNORECASE,
     ),
@@ -542,6 +548,14 @@ _MERCHANT_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(rf"\b(?:vpa|merchant)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9&*\.\'\-]{{2,40}}?){_TAIL}", re.IGNORECASE),
+    # Indian scripts put the "to" *after* the name: "SWIGGY को डेबिट",
+    # "SWIGGY க்கு பற்று", "SWIGGY కు డెబిట్". English patterns cannot see this,
+    # so the postposition is matched here rather than invented in normalize.py.
+    re.compile(
+        r"([A-Z0-9][A-Z0-9&*\.\'\- ]{2,40}?)\s*(?:को|க்கு|కు|ಗೆ|ത്തിലേക്ക്|ને)\s*"
+        r"(?:डेबिट|debited|debit|பற்று|డెబిట్|ಡೆಬಿಟ್)",
+        re.IGNORECASE,
+    ),
 )
 
 _MERCHANT_STOPWORDS = {

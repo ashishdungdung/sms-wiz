@@ -1,0 +1,20 @@
+{
+  "id": "sbi_hindi_devanagari_debit",
+  "description": "SBI Hindi SMS with Devanagari numerals and currency marker. Must parse and deduplicate like the ASCII version.",
+  "input": {
+    "sender": "VM-SBIN-T",
+    "received_at": "2025-03-01T17:00:00+05:30",
+    "body": "प्रिय ग्राहक, आपके खाते XX1094 से रु २,५००.०० दिनांक 25-02-25 को SWIGGY को डेबिट किए गए हैं (UPI Ref ५१२३४५६७८९०१). उपलब्ध शेष: रु ८,२००.००"
+  },
+  "expect": {
+    "intent": "expense",
+    "apple_subaction": "transactionalFinance",
+    "counts_toward_spend": true,
+    "amount": 2500.0,
+    "merchant_clean": "Swiggy",
+    "account_last4": "1094",
+    "scripts_include": [
+      "devanagari"
+    ]
+  }
+}

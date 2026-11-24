@@ -1,0 +1,23 @@
+{
+  "id": "hdfc_upi_debit_with_emi_ad",
+  "description": "Real HDFC UPI debit to Zepto (KiranaKart) with an embedded EasyEMI pitch. Stays one EXPENSE in Finance, the ad only sets a flag.",
+  "input": {
+    "sender": "AD-HDFCBK-T",
+    "received_at": "2025-03-01T10:00:00+05:30",
+    "body": "Rs.1,450.00 debited from A/c XX4092 on 25-02-25 to VPA KIRANAKART@axisbank (UPI Ref 505612345678). Avl Bal: Rs.5,000.00. Convert this spend into EasyEMI! bit.ly/hdfcemi"
+  },
+  "expect": {
+    "intent": "expense",
+    "apple_action": "transaction",
+    "apple_subaction": "transactionalFinance",
+    "ledger_treatment": "expense",
+    "counts_toward_spend": true,
+    "amount": 1450.0,
+    "merchant_clean": "Zepto",
+    "account_last4": "4092",
+    "flags_include": [
+      "embedded_upsell"
+    ],
+    "confidence_needs_review": false
+  }
+}

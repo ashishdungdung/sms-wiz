@@ -1,0 +1,15 @@
+{
+  "id": "irctc_chart_prepared",
+  "description": "IRCTC booking with PNR, train, coach and berth. Travel is not spend.",
+  "input": {
+    "sender": "AD-IRCTC-S",
+    "received_at": "2025-03-01T15:00:00+05:30",
+    "body": "Your ticket has been booked. PNR: 2459182736, Train 12627, Coach B2, Berth 45. Chart prepared."
+  },
+  "expect": {
+    "intent": "logistics",
+    "apple_subaction": "transactionalOrders",
+    "counts_toward_spend": false,
+    "retention": "delete_after_event"
+  }
+}
