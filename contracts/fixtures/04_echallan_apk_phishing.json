@@ -1,0 +1,19 @@
+{
+  "id": "echallan_apk_phishing",
+  "description": "Ten-digit mobile number impersonating Parivahan, asking for an .apk install. Quarantined, never confident-junked from a DLT header alone.",
+  "input": {
+    "sender": "9876543210",
+    "received_at": "2025-03-01T12:00:00+05:30",
+    "body": "RTO Parivahan Notice: Vehicle Challan of Rs 1000 pending. Download official app to view photo and pay: http://parivahan-echallan-pay.com/echallan.apk"
+  },
+  "expect": {
+    "intent": "phishing_suspect",
+    "apple_action": "junk",
+    "apple_subaction": "none",
+    "counts_toward_spend": false,
+    "retention": "expire_24h",
+    "alerts_include": [
+      "phishing_suspect"
+    ]
+  }
+}

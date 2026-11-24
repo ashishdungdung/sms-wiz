@@ -1,0 +1,26 @@
+{
+  "id": "nach_predebit_shortfall",
+  "description": "NACH pre-debit of 12,500 against a last reported balance of 5,000 on the same account. A notice, not a debit.",
+  "prior": [
+    {
+      "sender": "AD-HDFCBK-T",
+      "received_at": "2025-03-01T09:00:00+05:30",
+      "body": "Rs.1,450.00 debited from A/c XX4092. Avl Bal: Rs.5,000.00"
+    }
+  ],
+  "input": {
+    "sender": "VM-HDFCBK-S",
+    "received_at": "2025-03-01T11:00:00+05:30",
+    "body": "Dear Customer, your e-Mandate for Rs 12500.00 towards BAJAJ FINANCE EMI will be presented on 05-03-25 on A/c XX4092. Please maintain sufficient balance."
+  },
+  "expect": {
+    "intent": "upcoming_debit",
+    "apple_subaction": "transactionalReminders",
+    "counts_toward_spend": false,
+    "amount": 12500.0,
+    "alerts_include": [
+      "debit_shortfall"
+    ],
+    "retention": "delete_after_event"
+  }
+}

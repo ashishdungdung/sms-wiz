@@ -1,0 +1,15 @@
+{
+  "id": "cc_bill_payment",
+  "description": "Credit card bill paid from a bank account. A transfer, never new spending.",
+  "input": {
+    "sender": "AD-ICICIB-S",
+    "received_at": "2025-03-01T16:00:00+05:30",
+    "body": "Payment of Rs 18,450.00 towards your ICICI Credit Card XX4092 has been received. Thank you."
+  },
+  "expect": {
+    "intent": "cc_bill_payment",
+    "ledger_treatment": "internal_transfer",
+    "counts_toward_spend": false,
+    "amount": 18450.0
+  }
+}

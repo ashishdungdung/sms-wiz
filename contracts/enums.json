@@ -1,0 +1,75 @@
+{
+  "_comment": "Generated from the Python enums. Swift mirrors these raw values in ios/Packages/SMSCore/Sources/SMSCore/Contracts.swift; `make verify-contracts` enforces it.",
+  "apple_actions": [
+    "allow",
+    "junk",
+    "promotion",
+    "transaction"
+  ],
+  "apple_subactions": [
+    "none",
+    "transactionalOthers",
+    "transactionalFinance",
+    "transactionalOrders",
+    "transactionalReminders",
+    "transactionalHealth",
+    "transactionalWeather",
+    "transactionalCarrier",
+    "transactionalRewards",
+    "transactionalPublicServices",
+    "promotionalOthers",
+    "promotionalOffers",
+    "promotionalCoupons"
+  ],
+  "entity_kinds": [
+    "bank",
+    "fintech",
+    "govt",
+    "brand",
+    "telecom",
+    "personal_mobile",
+    "shortcode",
+    "unknown"
+  ],
+  "intents": [
+    "expense",
+    "income",
+    "refund_initiated",
+    "refund_credited",
+    "cc_bill_payment",
+    "self_transfer",
+    "cash_withdrawal",
+    "instrument_load",
+    "fastag_toll",
+    "investment",
+    "upcoming_debit",
+    "bill_due",
+    "otp",
+    "voucher_issued",
+    "logistics",
+    "govt_notice",
+    "health",
+    "bank_upsell",
+    "commercial_promo",
+    "phishing_suspect",
+    "unknown"
+  ],
+  "ledger_treatments": [
+    "expense",
+    "income",
+    "refund",
+    "internal_transfer",
+    "instrument_load",
+    "cash_withdrawal",
+    "investment",
+    "none"
+  ],
+  "retentions": [
+    "keep_forever",
+    "expire_30d",
+    "expire_7d",
+    "expire_24h",
+    "delete_after_event",
+    "review"
+  ]
+}

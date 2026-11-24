@@ -1,0 +1,20 @@
+{
+  "id": "hdfc_standalone_loan_upsell",
+  "description": "Official HDFC -S header, standalone loan pitch, no money movement. Demoted to Promotions.",
+  "input": {
+    "sender": "AD-HDFCBK-S",
+    "received_at": "2025-03-01T13:00:00+05:30",
+    "body": "Congrats! You have a Pre-Approved Personal Loan of Rs 5,00,000 in 10 seconds with zero documentation. Apply now!"
+  },
+  "expect": {
+    "intent": "bank_upsell",
+    "apple_action": "promotion",
+    "apple_subaction": "promotionalOffers",
+    "ledger_treatment": "none",
+    "counts_toward_spend": false,
+    "amount": 500000.0,
+    "flags_include": [
+      "bank_marketing"
+    ]
+  }
+}

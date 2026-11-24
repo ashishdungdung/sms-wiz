@@ -1,0 +1,24 @@
+{
+  "id": "phonepe_duplicate_same_rrn",
+  "description": "The same payment reported again by PhonePe, sharing the 12-digit UPI RRN. Must be suppressed, not counted twice.",
+  "prior": [
+    {
+      "sender": "AD-HDFCBK-T",
+      "received_at": "2025-03-01T10:00:00+05:30",
+      "body": "Rs.1,450.00 debited from A/c XX4092 on 25-02-25 to VPA KIRANAKART@axisbank (UPI Ref 505612345678). Avl Bal: Rs.5,000.00."
+    }
+  ],
+  "input": {
+    "sender": "AX-PHONPE-S",
+    "received_at": "2025-03-01T10:01:00+05:30",
+    "body": "Paid Rs. 1450 to Zepto (KIRANAKART TECHNOLOGIES) via HDFC Bank XX4092. UPI Ref: 505612345678."
+  },
+  "expect": {
+    "intent": "expense",
+    "dedup_status": "suppressed_duplicate",
+    "amount": 1450.0,
+    "alerts_include": [
+      "duplicate_suppressed"
+    ]
+  }
+}
