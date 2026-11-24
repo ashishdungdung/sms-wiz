@@ -1,0 +1,782 @@
+{
+  "version": 1,
+  "syntax": "sms-wiz.filter/v1",
+  "notes": [
+    "Authoring file for the message filter's OFFLINE pass.",
+    "Rules here must be answerable from one text message with no network, no",
+    "database and no model: the iOS extension runs them in milliseconds.",
+    "The full Python rule chain still classifies the message when it reaches",
+    "the app; these rules only decide the folder before that happens.",
+    "Allowed: action in [allow, junk, promotion, transaction].",
+    "sub_action must be one the app declares (max 5 transactional, 5 promotional).",
+    "First matching rule wins; order therefore matters, and is preserved as written.",
+    "Junk rules must name a danger signal (apk, kyc, winner, blocked, otp, cvv,",
+    "click here...). 'Offer', 'sale' and 'discount' are not danger signals: they",
+    "belong in promotions, or users learn to ignore the junk folder.",
+    "to a real debit cannot hide the debit.",
+    "A plain debit or credit alert is intentionally left as `allow`: iOS keeps it in",
+    "the inbox and the app classifies it on ingest. The offline pass only rescues",
+    "messages that would be buried (due dates, pre-debits, OTPs, parcel codes)."
+  ],
+  "rules": [
+    {
+      "id": "security.apk_download",
+      "when": {
+        "any": [
+          "apk",
+          "install app",
+          "download app"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.95,
+        "reason": "asks an unknown sender's link recipient to install an app"
+      }
+    },
+    {
+      "id": "security.kyc_link_from_personal_number",
+      "when": {
+        "all": [
+          "kyc"
+        ],
+        "any": [
+          "update",
+          "expire",
+          "suspend",
+          "block"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown"
+        ],
+        "has_link": true
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.9,
+        "reason": "KYC pressure plus a link from a number no bank uses"
+      }
+    },
+    {
+      "id": "security.credential_phishing",
+      "when": {
+        "any": [
+          "share your otp",
+          "send otp",
+          "cvv",
+          "card number and cvv",
+          "net banking password",
+          "upi pin",
+          "login pin"
+        ],
+        "none": [
+          "do not share",
+          "never share",
+          "do not disclose"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.97,
+        "reason": "asks for a credential; banks and NPCI never do this by SMS"
+      }
+    },
+    {
+      "id": "security.account_block_threat",
+      "when": {
+        "any": [
+          "account will be blocked",
+          "account will be suspended",
+          "card will be blocked",
+          "service will be deactivated",
+          "number will be disconnected today"
+        ],
+        "has_link": true,
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.9,
+        "reason": "deadline threat plus an unregistered link: the standard Indian phishing shape"
+      }
+    },
+    {
+      "id": "security.digital_arrest",
+      "when": {
+        "any": [
+          "digital arrest",
+          "cbi case",
+          "police case against you",
+          "courier contains illegal",
+          "narcotics found",
+          "money laundering case"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.95,
+        "reason": "digital-arrest script; no agency opens a case over SMS"
+      }
+    },
+    {
+      "id": "fraud.guaranteed_returns",
+      "when": {
+        "any": [
+          "guaranteed returns",
+          "assured returns",
+          "double your money",
+          "risk free profit",
+          "sure shot",
+          "100% return",
+          "daily profit"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.9,
+        "reason": "SEBI-registered advice never promises a return"
+      }
+    },
+    {
+      "id": "fraud.telegram_stock_tips",
+      "when": {
+        "any": [
+          "telegram",
+          "whatsapp group",
+          "join our group",
+          "paid group"
+        ],
+        "all": [
+          "stock",
+          "tips"
+        ],
+        "has_link": true,
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.88,
+        "reason": "pump-and-dump recruitment: a group link plus 'stock tips'"
+      }
+    },
+    {
+      "id": "fraud.job_offer_with_fee",
+      "when": {
+        "all": [
+          "job"
+        ],
+        "any": [
+          "registration fee",
+          "pay rs",
+          "security deposit",
+          "refundable amount",
+          "training fee"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.9,
+        "reason": "a job that charges the candidate is a scam, not a job"
+      }
+    },
+    {
+      "id": "security.lottery_bait",
+      "when": {
+        "any": [
+          "lucky winner",
+          "you have won",
+          "prize of",
+          "crore winner",
+          "lakhs winner",
+          "kbc winner"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.85,
+        "reason": "lottery bait from a non-institutional sender"
+      }
+    },
+    {
+      "id": "security.fake_courier_customs",
+      "when": {
+        "any": [
+          "parcel is held",
+          "customs duty",
+          "courier is stuck",
+          "illegal items in parcel"
+        ],
+        "has_link": true,
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "junk",
+        "sub_action": "none",
+        "confidence": 0.9,
+        "reason": "customs/parcel threat plus a link: India Post and couriers never bill by SMS link"
+      }
+    },
+    {
+      "id": "otp.never_junk",
+      "when": {
+        "any": [
+          "otp",
+          "one time password",
+          "verification code",
+          "do not share"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.95,
+        "reason": "an OTP must stay visible; it expires in minutes and users look in Transactions"
+      }
+    },
+    {
+      "id": "otp.no_share_warning",
+      "when": {
+        "any": [
+          "do not share this otp",
+          "never share your otp",
+          "do not disclose the otp"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.9,
+        "reason": "genuine OTP with the bank's own anti-fraud warning"
+      }
+    },
+    {
+      "id": "bank.cc_payment_received",
+      "when": {
+        "all": [
+          "card"
+        ],
+        "any": [
+          "has been received",
+          "payment of rs",
+          "thank you for your payment",
+          "bill payment successful"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalFinance",
+        "confidence": 0.9,
+        "reason": "card settlement receipt; needed to close the statement"
+      }
+    },
+    {
+      "id": "bank.statement_due",
+      "when": {
+        "any": [
+          "total due",
+          "minimum due",
+          "statement",
+          "amount due",
+          "payment due"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.9,
+        "reason": "a due date the user must act on before it becomes interest"
+      }
+    },
+    {
+      "id": "bank.mandate_notice",
+      "when": {
+        "any": [
+          "will be debited",
+          "will be presented",
+          "e-mandate",
+          "nach mandate",
+          "autopay",
+          "auto pay",
+          "standing instruction"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.9,
+        "reason": "pre-debit notice: the only chance to fund the account first"
+      }
+    },
+    {
+      "id": "bank.cheque_or_clearing",
+      "when": {
+        "any": [
+          "cheque",
+          "chq",
+          "clearing",
+          "returned unpaid",
+          "insufficient funds"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalFinance",
+        "confidence": 0.85,
+        "reason": "a bounce has a fee and a credit-score cost; never hide it"
+      }
+    },
+    {
+      "id": "demat.trade_confirmation",
+      "when": {
+        "any": [
+          "order executed",
+          "trade confirmation",
+          "shares bought",
+          "shares sold",
+          "units allotted",
+          "isin",
+          "executed at",
+          "order for"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalOrders",
+        "confidence": 0.88,
+        "reason": "trade confirmations are the cost-basis record for capital gains"
+      }
+    },
+    {
+      "id": "demat.dividend_or_allotment",
+      "when": {
+        "any": [
+          "dividend",
+          "bonus shares",
+          "stock split",
+          "rights issue",
+          "ipo allotment",
+          "asba",
+          "allotted",
+          "credited to your folio"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalFinance",
+        "confidence": 0.87,
+        "reason": "corporate actions change holdings and tax basis"
+      }
+    },
+    {
+      "id": "travel.irctc_booking",
+      "when": {
+        "any": [
+          "pnr",
+          "chart prepared",
+          "booking confirmed",
+          "ticket booked",
+          "coach",
+          "berth",
+          "boarding pass"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalOrders",
+        "confidence": 0.9,
+        "reason": "ticket and PNR must survive until the journey"
+      }
+    },
+    {
+      "id": "travel.bus_flight_booking",
+      "when": {
+        "any": [
+          "bus ticket",
+          "flight booked",
+          "get boarding pass",
+          "web check-in",
+          "check-in is open",
+          "departure gate"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalOrders",
+        "confidence": 0.88,
+        "reason": "departure details are time-critical"
+      }
+    },
+    {
+      "id": "bill.utility_due",
+      "when": {
+        "any": [
+          "bill due",
+          "is due on",
+          "due date",
+          "last date to pay",
+          "disconnection notice",
+          "electricity bill",
+          "water bill",
+          "gas booking",
+          "postpaid bill",
+          "bill generated"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.88,
+        "reason": "utilities disconnect on a date; the date is the message"
+      }
+    },
+    {
+      "id": "telco.recharge_or_bill",
+      "when": {
+        "any": [
+          "recharge successful",
+          "recharged with",
+          "plan activated",
+          "data balance",
+          "postpaid bill",
+          "bill generated",
+          "autopay for your airtel",
+          "autopay for your jio"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalFinance",
+        "confidence": 0.9,
+        "reason": "carrier messages are their own Apple sub-action"
+      }
+    },
+    {
+      "id": "delivery.handover_code",
+      "when": {
+        "any": [
+          "out for delivery",
+          "handover code",
+          "arriving today",
+          "delivery code",
+          "ready for pickup",
+          "awb"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalOrders",
+        "confidence": 0.9,
+        "reason": "the code expires today; it is the only thing that matters"
+      }
+    },
+    {
+      "id": "rewards.voucher_code",
+      "when": {
+        "any": [
+          "voucher code",
+          "gift card",
+          "coupon code",
+          "e-gift",
+          "promo code worth"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalRewards",
+        "confidence": 0.87,
+        "reason": "a voucher has money in it and an expiry date"
+      }
+    },
+    {
+      "id": "govt.challan_notice",
+      "when": {
+        "any": [
+          "challan",
+          "penalty",
+          "notice",
+          "court",
+          "rto"
+        ],
+        "none": [
+          "click here to pay",
+          "bit.ly"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalPublicServices",
+        "confidence": 0.85,
+        "reason": "a legal demand is a record even before it is paid"
+      }
+    },
+    {
+      "id": "health.appointment_or_report",
+      "when": {
+        "any": [
+          "appointment",
+          "report is ready",
+          "prescription",
+          "lab report",
+          "discharge summary"
+        ]
+      },
+      "then": {
+        "action": "transaction",
+        "sub_action": "transactionalReminders",
+        "confidence": 0.85,
+        "reason": "medical records are the one thing users must not lose"
+      }
+    },
+    {
+      "id": "promo.emi_offer",
+      "when": {
+        "any": [
+          "easy emi",
+          "convert to emi",
+          "convert your purchase",
+          "pre-approved",
+          "pre approved",
+          "no cost emi"
+        ],
+        "none": [
+          "debited",
+          "emi of rs"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalOffers",
+        "confidence": 0.86,
+        "reason": "EMI conversion pitch attached to a card, not a payment"
+      }
+    },
+    {
+      "id": "promo.card_offer",
+      "when": {
+        "any": [
+          "cashback",
+          "reward points",
+          "voucher worth",
+          "discount on",
+          "offer valid",
+          "milestone"
+        ],
+        "sender_kinds": [
+          "bank",
+          "fintech",
+          "brand"
+        ],
+        "none": [
+          "debited",
+          "credited",
+          "withdrawn",
+          "spent at"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalOffers",
+        "confidence": 0.85,
+        "reason": "an offer from an institution that the user may actually want"
+      }
+    },
+    {
+      "id": "promo.insurance_upsell",
+      "when": {
+        "any": [
+          "insurance",
+          "policy",
+          "cover of rs",
+          "premium starting"
+        ],
+        "none": [
+          "debited",
+          "credited",
+          "premium due"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalOffers",
+        "confidence": 0.85,
+        "reason": "insurance cross-sell is marketing, even from the user's own bank"
+      }
+    },
+    {
+      "id": "promo.loan_pitch",
+      "when": {
+        "any": [
+          "personal loan",
+          "instant loan",
+          "loan approved",
+          "pre-approved",
+          "credit limit",
+          "loan offer"
+        ],
+        "none": [
+          "debited",
+          "credited",
+          "emi of rs"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalOffers",
+        "confidence": 0.87,
+        "reason": "lending pitch: it is about borrowing money the user does not need"
+      }
+    },
+    {
+      "id": "promo.bulk_marketing",
+      "when": {
+        "any": [
+          "unsubscribe",
+          "t&c apply",
+          "t&c",
+          "% off",
+          "sale ends",
+          "flat off",
+          "book now",
+          "shop now"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode",
+          "bank",
+          "fintech",
+          "brand"
+        ],
+        "none": [
+          "debited",
+          "credited",
+          "payment of",
+          "withdrawn",
+          "spent at"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalCoupons",
+        "confidence": 0.85,
+        "reason": "bulk retail marketing with an unsubscribe footer"
+      }
+    },
+    {
+      "id": "promo.real_estate_pitch",
+      "when": {
+        "any": [
+          "floor plan",
+          "site visit",
+          "pre-launch",
+          "bhk",
+          "plot in"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalCoupons",
+        "confidence": 0.8,
+        "reason": "property spam: promotional, not junk, because some users are buyers"
+      }
+    },
+    {
+      "id": "promo.coaching_pitch",
+      "when": {
+        "any": [
+          "admission open",
+          "batch starting",
+          "free demo class",
+          "fee discount",
+          "scholarship test"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalCoupons",
+        "confidence": 0.8,
+        "reason": "coaching marketing is loud but legitimate"
+      }
+    },
+    {
+      "id": "promo.betting_app",
+      "when": {
+        "any": [
+          "betting",
+          "odds",
+          "fantasy team",
+          "rummy",
+          "teen patti",
+          "casino"
+        ],
+        "sender_kinds": [
+          "personal_mobile",
+          "unknown",
+          "shortcode"
+        ]
+      },
+      "then": {
+        "action": "promotion",
+        "sub_action": "promotionalCoupons",
+        "confidence": 0.8,
+        "reason": "gambling promotions are legal to sort, not to quarantine"
+      }
+    }
+  ]
+}

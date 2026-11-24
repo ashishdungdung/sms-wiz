@@ -1,0 +1,16 @@
+{
+  "id": "zerodha_trade_execution",
+  "description": "Demat order confirmation. Shares moved; the rupee leg arrives as a separate bank message, so this must never count as spend.",
+  "input": {
+    "sender": "AD-ZERODH-S",
+    "received_at": "2025-03-01T10:15:00+05:30",
+    "body": "Your order for 10 shares of INFY executed at Rs 1450.00 on NSE. Order ID 250301001234."
+  },
+  "expect": {
+    "intent": "trade",
+    "apple_action": "transaction",
+    "apple_subaction": "transactionalOrders",
+    "counts_toward_spend": false,
+    "ledger_treatment": "none"
+  }
+}

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from . import store
+from . import extract
 from .classify import analyse
 from .db import connect
 from .llm import LLMEnricher
@@ -37,6 +38,51 @@ def _localise(value: Optional[datetime]) -> datetime:
     return value
 
 
+#: How far back a date written in a message may pull an event. Bank SMS arrive
+#: same-day; a wider window is for archive imports and for a phone that was
+#: offline for a week.
+STATED_DATE_WINDOW_DAYS = 45
+
+
+def _apply_stated_date(event: SmsEvent, received_at: datetime) -> SmsEvent:
+    """Attribute the money to the day the message says it happened.
+
+    "Rs.300 debited ... on 31-03-26", delivered on 2 April, belongs to March: a
+    ledger filed by arrival time quietly moves spending between months. The time
+    of day stays the arrival time, because the message only carries a date.
+
+    Only a past date inside the window is used: "your ticket for 20-03-26" is a
+    journey, not a purchase, and a date that is implausible for this message
+    (future, or months old) is not trusted at all.
+    """
+    if event.ledger.treatment.value not in store.MONEY_TREATMENTS:
+        return event
+
+    stated = [
+        hit.value.date()
+        for hit in extract.find_dates(event.body, received_at)
+        if received_at.date() - timedelta(days=STATED_DATE_WINDOW_DAYS)
+        <= hit.value.date()
+        <= received_at.date()
+    ]
+    if stated:
+        best = max(stated)
+        if best != received_at.date():
+            event.received_at = received_at.replace(year=best.year, month=best.month, day=best.day)
+            event.analysis["stated_date"] = best.isoformat()
+            event.flags.append("dated_in_message")
+        return event
+
+    bad = extract.unparsed_dates(event.body, received_at)
+    if bad:
+        # "31-02-26" is not a day. Keep the arrival date and say so, rather than
+        # silently banking a month's spend into the next one.
+        event.flags.append("date_unparseable")
+        event.analysis["date_unparseable"] = bad[0]
+        event.confidence.needs_review = True
+    return event
+
+
 class Ingestor:
     def __init__(self, db_path: Optional[str] = None, enricher: Optional[LLMEnricher] = None) -> None:
         self.db_path = db_path
@@ -54,6 +100,7 @@ class Ingestor:
             merchants=self.merchants,
             source=request.source,
         )
+        event = _apply_stated_date(event, received_at)
 
         if self.enricher.enabled:
             event = self.enricher.enrich(event, self.merchants)
@@ -84,6 +131,33 @@ class Ingestor:
     def _deduplicate(self, conn, event: SmsEvent, alerts: list[Alert]) -> Optional[str]:
         reference = event.analysis.get("reference")
         is_money = event.ledger.treatment.value in store.MONEY_TREATMENTS
+
+        if is_money:
+            # Byte-identical re-delivery (iCloud sync, carrier duplicate) is the
+            # cheapest duplicate to catch and the one users hit most often.
+            day = event.received_at.strftime("%Y-%m-%d")
+            same = store.find_identical(
+                conn,
+                event.sender_raw,
+                event.body,
+                day,
+                event.otp.code if event.otp else None,
+                at=event.received_at,
+            )
+            if same:
+                event.dedup.status = "suppressed_duplicate"
+                event.dedup.duplicate_of = same["event_id"]
+                event.dedup.reason = "identical message from the same sender was already recorded today"
+                event.analysis["duplicate_kind"] = "identical_redelivery"
+                alerts.append(
+                    Alert(
+                        severity="info",
+                        kind="duplicate_suppressed",
+                        message="Identical message delivered twice — the second copy was not counted again.",
+                        data={"duplicate_of": same["event_id"]},
+                    )
+                )
+                return same["event_id"]
 
         if reference and is_money:
             existing = store.find_by_reference(conn, str(reference))
@@ -118,15 +192,28 @@ class Ingestor:
             if event.institution:
                 last4 = event.institution.account_last4 or event.institution.card_last4
             day = event.received_at.strftime("%Y-%m-%d")
-            candidate = store.find_possible_duplicate(conn, event.amount.value, day, last4, event.sender_raw)
+            candidate = store.find_possible_duplicate(
+                conn,
+                event.amount.value,
+                day,
+                last4,
+                event.sender_raw,
+                merchant=event.merchant.clean if event.merchant else None,
+            )
             if candidate and candidate["intent"] in refund_intents:
                 candidate = None
             if candidate:
                 event.dedup.status = "possible_duplicate"
                 event.dedup.duplicate_of = candidate["event_id"]
+                shared = (
+                    f"the same card ending {last4}"
+                    if candidate.get("match_kind") == "instrument"
+                    else f"the same merchant ({candidate.get('merchant_clean')})"
+                )
                 event.dedup.reason = (
                     f"same amount ₹{event.amount.value:,.2f} on the same day from a different sender "
-                    f"({candidate['sender_name'] or candidate['sender_raw']}); not merged automatically"
+                    f"({candidate['sender_name'] or candidate['sender_raw']}) and {shared}; "
+                    "not merged automatically"
                 )
                 event.confidence.needs_review = True
                 event.flags.append("possible_duplicate")
@@ -159,18 +246,28 @@ class Ingestor:
         )
 
     def _track_refund(self, conn, event: SmsEvent, alerts: list[Alert]) -> None:
-        if event.intent is Intent.REFUND_INITIATED and event.amount:
+        if event.intent is Intent.REFUND_INITIATED:
+            # Even without a figure this is a promise somebody owes you; a claim
+            # with amount 0 means "amount unknown" and is matched by merchant.
             refund_id = store.open_refund(conn, event)
-            merchant = merchant_label(event)
+            # The claim stores the sender's brand when the text names none, so
+            # the alert should say the same name the tracker will match on.
+            merchant = store.refund_merchant(event) or merchant_label(event)
+            money = (
+                f"the ₹{event.amount.value:,.2f} refund"
+                if event.amount
+                else "the refund"
+            )
             alerts.append(
                 Alert(
                     severity="info",
                     kind="refund_tracking_started",
                     message=(
-                        f"Tracking the ₹{event.amount.value:,.2f} refund from {merchant}. "
-                        "I will flag it if no credit is seen within 10 days."
+                        f"Tracking {money} from {merchant}"
+                        + ("" if event.amount else " (amount not stated)")
+                        + ". I will flag it if no credit is seen within 10 days."
                     ),
-                    data={"refund_id": refund_id},
+                    data={"refund_id": refund_id, "amount_known": bool(event.amount)},
                 )
             )
         elif event.intent is Intent.REFUND_CREDITED and event.amount:
@@ -201,6 +298,36 @@ class Ingestor:
                     )
                 )
             else:
+                # Refunds rarely land on the exact figure. A credit that is at
+                # least the claimed amount, from the same merchant, is almost
+                # always that claim (partly, or together with another order).
+                cover = store.find_covering_refund(
+                    conn, event.amount.value, merchant, at=event.received_at
+                )
+                if cover:
+                    store.resolve_refund(conn, cover["id"], event.event_id, event.received_at.isoformat())
+                    claimed = float(cover["amount"])
+                    credit = event.amount.value
+                    if credit > claimed + 0.01:
+                        note = (
+                            f"Closed, but the extra ₹{credit - claimed:,.2f} may belong to another order."
+                        )
+                    elif credit < claimed - 0.01:
+                        note = "Closed as a partial refund."
+                    else:
+                        note = "Closed."
+                    alerts.append(
+                        Alert(
+                            severity="warning",
+                            kind="refund_amount_mismatch",
+                            message=(
+                                f"₹{credit:,.2f} credited against a ₹{claimed:,.2f} refund claim "
+                                f"from {merchant}. {note}"
+                            ),
+                            data={"refund_id": cover["id"], "claimed": claimed},
+                        )
+                    )
+                    return
                 alerts.append(
                     Alert(
                         severity="info",

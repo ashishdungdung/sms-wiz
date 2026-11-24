@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from . import extract, forensics
+from . import catalog, extract, forensics, templates
 from .merchants import MerchantDictionary
 from .normalize import normalize_text
 from .models import (
@@ -28,6 +28,7 @@ from .models import (
     Institution,
     Intent,
     Ledger,
+    LedgerTreatment,
     LogisticsInfo,
     Merchant,
     OtpInfo,
@@ -35,11 +36,12 @@ from .models import (
     Routing,
     SenderInfo,
     SmsEvent,
+    TradeInfo,
     VoucherInfo,
     utcnow,
 )
 from .redact import redact
-from .registry import ALIAS_INDEX, ROUTING, effective_subaction
+from .registry import ALIAS_INDEX, ROUTING, EntityKind, effective_subaction
 
 # --------------------------------------------------------------------------
 # Pattern banks
@@ -54,6 +56,11 @@ CC_BILL_PATTERNS = (
     r"\bcredited\s+to\s+your\s+(?:credit\s+)?card\b",
     r"\bcard\s+payment\s+(?:received|successful|of|done)\b",
     r"\bpayment\s+(?:successful|done|completed)\b.{0,60}\bcredit\s+card\b",
+    # Paying the card *from* the bank account: "Rs 18,450 debited from A/c
+    # XX4092 to Credit Card XX4433". The debit is real, the spend already
+    # happened on the card, so counting both would double it.
+    r"\b(?:to|towards)\s+(?:your\s+)?(?:credit\s+card|card\s+(?:ending|no\.?|xx)|cc\s*(?:a/c|ac|payment))\b",
+    r"\b(?:cc|card)\s+payment\b",
 )
 
 REFUND_INITIATED_PATTERNS = (
@@ -87,6 +94,60 @@ LOGISTICS_PATTERNS = (
     r"\bchart\s+prepared\b",
     r"\b(?:pnr|coach|berth|boarding|train\s+no|flight\s+no)\b",
     r"\b(?:awb|docket)\b",
+)
+#: Travel is a *booking record*. The money arrives as its own bank debit, so a
+#: ticket must never be counted a second time — it carries an itinerary instead.
+TRAVEL_PATTERNS = (
+    r"\b(?:pnr|coach|berth|boarding\s+pass|e-?ticket|web\s+ticket)\b",
+    r"\b(?:train|railway|irctc)\b.{0,40}\b(?:booked|confirmed|ticket|journey)\b",
+    r"\b(?:bus|flight|airlines?|airways)\b.{0,40}\b(?:booked|confirmed|ticket|departure)\b",
+    r"\b(?:hotel|resort)\b.{0,40}\b(?:booking|reservation|check-?in)\b",
+    r"\b(?:departure|arrival)\s*(?:time|at)?\b.{0,20}\d{1,2}[:.]\d{2}",
+)
+TRAVEL_MODE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("train", r"\b(?:train|irctc|railway|coach|berth|sleeper|chair\s+car)\b"),
+    ("bus", r"\b(?:bus|volvo|sleeper\s+bus|redbus|abhibus|bus\s+ticket)\b"),
+    ("flight", r"\b(?:flight|airline|airways|boarding|terminal|gate|indigo|air\s+india|vistara|spicejet|akasa)\b"),
+    ("hotel", r"\b(?:hotel|resort|stay|check-?in|check-?out|room)\b"),
+)
+TRAVEL_PROVIDERS: tuple[tuple[str, str], ...] = (
+    ("IRCTC", r"\birctc\b|indian\s+railway"),
+    ("RedBus", r"\bredbus\b"),
+    ("AbhiBus", r"\babhibus\b"),
+    ("ixigo", r"\bixigo\b"),
+    ("MakeMyTrip", r"\bmakemytrip\b|\bmmt\b"),
+    ("Goibibo", r"\bgoibibo\b"),
+    ("Cleartrip", r"\bcleartrip\b"),
+    ("IndiGo", r"\bindigo\b|\b6e\b"),
+    ("Air India", r"\bair\s+india\b"),
+    ("Vistara", r"\bvistara\b"),
+    ("SpiceJet", r"\bspicejet\b"),
+    ("Akasa Air", r"\bakasa\b"),
+    ("OYO", r"\boyo\b"),
+)
+TRADE_PATTERNS = (
+    r"\b(?:bought|sold|purchased)\b.{0,60}\b(?:shares?|units?|qty)\b",
+    r"\border\b.{0,40}\b(?:executed|placed|confirmed)\b",
+    r"\b(?:trade|contract)\s+(?:confirmation|note)\b",
+    r"\bdelivery\s+(?:instruction|obligation)\b",
+    r"\b(?:units?|shares?)\b.{0,40}\ballotted\b",
+    r"\ballotted\s+(?:to\s+)?(?:your\s+)?folio\b",
+    r"\bfolio\b.{0,40}\b(?:units?|nav)\b",
+)
+DIVIDEND_PATTERNS = (
+    r"\bdividend\b",
+    r"\binterest\s+(?:payout|credited)\b.{0,40}\b(?:debenture|bond|ncd)\b",
+)
+IPO_PATTERNS = (
+    r"\b(?:asba|ipo)\b.{0,60}\b(?:allot|allotted|allotment|blocked|applied|application|refund|unblock)\b",
+    r"\b(?:allotment|allotted)\b.{0,40}\b(?:shares?|ipo)\b",
+)
+CORPORATE_ACTION_PATTERNS = (
+    r"\bbonus\s+(?:shares?|issue)\b",
+    r"\b(?:stock|share)\s+split\b|\bsub-?division\b",
+    r"\brights\s+(?:issue|entitlement)\b",
+    r"\bbuy-?back\b",
+    r"\bface\s+value\s+split\b",
 )
 UPCOMING_DEBIT_PATTERNS = (
     r"\bwill\s+be\s+(?:presented|debited|deducted|charged)\b",
@@ -123,6 +184,16 @@ VOUCHER_REJECT = re.compile(
     r"grab|hurry|limited\s+period|apply\s+now)\b",
     re.IGNORECASE,
 )
+#: "to A/c XX7788 (self transfer)", "to your own account", "self transfer to".
+#: The intent existed from day one but nothing produced it, so an own-account
+#: move was counted as spending.
+SELF_TRANSFER_PATTERNS = (
+    r"\bself\s+transfer\b",
+    r"\bto\s+(?:your\s+)?own\s+(?:a/c|account|ac)\b",
+    r"\btransfer\s+within\s+(?:your\s+)?(?:own\s+)?accounts?\b",
+    r"\bbetween\s+your\s+(?:own\s+)?accounts?\b",
+)
+
 INVESTMENT_PATTERNS = (
     r"\b(?:sip|systematic\s+investment|mutual\s+fund)\b",
     r"\b(?:units?\s+(?:allotted|purchased|credited)|nav\s+of|folio)\b",
@@ -130,6 +201,9 @@ INVESTMENT_PATTERNS = (
     r"\b(?:demat|cdsl|nsdl)\b",
     r"\b(?:dividend|bonus\s+shares|stock\s+split)\b",
 )
+#: An AWB or courier docket makes it a parcel, whatever else the text says.
+TRACKING_ONLY = re.compile(r"\b(?:awb|docket|consignment|tracking\s+(?:id|no))\b", re.IGNORECASE)
+
 GOVT_PATTERNS = (
     r"\b(?:e-?challan|challan)\b",
     r"\b(?:income\s+tax|itr|tds|form\s+16)\b",
@@ -171,6 +245,51 @@ CREDIT_VERBS = re.compile(
     r"\b(?:credited|credit|received|refunded|reversed|deposited|salary|cashback|cr\b)\b",
     re.IGNORECASE,
 )
+#: Something moved *and is finished*. "Rs 5,000 credited to A/c" is money;
+#: "OTP for a transfer of Rs 5,000" is not, even though both name an amount.
+COMPLETED_MOVEMENT = re.compile(
+    r"\b(?:has\s+been|have\s+been|was|were|been)?\s*"
+    r"(?:debited|credited|withdrawn|deposited|deducted|transferred|paid|received|reversed|refunded)\b",
+    re.IGNORECASE,
+)
+_FUTURE_MOVEMENT = re.compile(
+    r"\b(?:will|would|shall|is\s+going\s+to)\s+be\s+"
+    r"(?:debited|deducted|charged|presented|paid)\b",
+    re.IGNORECASE,
+)
+_ACCOUNT_MARKER = re.compile(r"\b(?:a/c|acct|account|xx\d{4}|\*{2,}\d{4}|card\s+\S*\d{4})\b", re.IGNORECASE)
+_DECLINED = re.compile(
+    r"\b(?:declined|failed|unsuccessful|not\s+processed|could\s+not\s+be\s+processed|rejected)\b",
+    re.IGNORECASE,
+)
+
+
+_BOOKING_LANGUAGE = re.compile(r"\b(?:booked|booking\s+confirmed|ticket|reservation)\b", re.IGNORECASE)
+
+
+def _money_already_moved(lower: str, amount: object, pnr: Optional[str] = None) -> bool:
+    """True when the message reports a *finished* movement of money.
+
+    Used to keep money rules ahead of travel/logistics/OTP: a delivery notice
+    that also says "Rs 250 debited to SWIGGY" is a payment, and a filter that
+    files it as logistics silently drops ₹250 from the ledger.
+
+    Two exceptions, both deliberate:
+
+    * a future movement ("will be debited") has not happened yet;
+    * a booking confirmation that names a PNR is the ticket record. Its fare was
+      charged by the payment message, and treating it as spending here would
+      double count the trip.
+    """
+    if amount is None:
+        return False
+    if _FUTURE_MOVEMENT.search(lower):
+        return False
+    if not COMPLETED_MOVEMENT.search(lower):
+        return False
+    if _ACCOUNT_MARKER.search(lower):
+        return True
+    return not (pnr and _BOOKING_LANGUAGE.search(lower))
 
 DOMAIN_BY_INTENT: dict[Intent, str] = {
     Intent.EXPENSE: "finance",
@@ -188,6 +307,11 @@ DOMAIN_BY_INTENT: dict[Intent, str] = {
     Intent.OTP: "security",
     Intent.VOUCHER_ISSUED: "perks",
     Intent.LOGISTICS: "logistics",
+    Intent.TRAVEL: "travel",
+    Intent.TRADE: "finance",
+    Intent.DIVIDEND: "finance",
+    Intent.IPO: "finance",
+    Intent.CORPORATE_ACTION: "finance",
     Intent.GOVT_NOTICE: "government",
     Intent.HEALTH: "health",
     Intent.BANK_UPSELL: "marketing",
@@ -283,18 +407,71 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
         evidence.append("message reports a card bill payment")
         return Intent.CC_BILL_PAYMENT, 0.85, evidence, flags
 
-    # 3. Refunds -----------------------------------------------------------
-    if re.search(r"\brefund\b|\breversal\b", lower):
+    # 3. Refunds and reversals ---------------------------------------------
+    if re.search(r"\brefund\b|\brevers(?:al|ed|e)\b", lower):
         if _any(REFUND_INITIATED_PATTERNS, lower):
             evidence.append("refund promised but not yet confirmed")
             return Intent.REFUND_INITIATED, 0.8, evidence, flags
         if _any(REFUND_CREDITED_PATTERNS, lower):
             evidence.append("refund credited")
             return Intent.REFUND_CREDITED, 0.85, evidence, flags
+        # A reversal is money coming back, not new spending and not income: the
+        # ₹500 debit may already be in the ledger from its own message, and
+        # counting this one as a second expense (or as salary-like income)
+        # bends both totals. Whether it already happened decides the intent:
+        # "will be reversed" is a promise, "has been reversed" is a credit.
+        if re.search(r"\brevers(?:al|ed|e)\b", lower):
+            pending = re.search(
+                r"\b(?:will|shall|being|would|expected)\b|\bwithin\s+\d+\s+(?:\w+\s+)?days?\b",
+                lower,
+            )
+            flags.append("reversal_pending" if pending else "reversal")
+            evidence.append(
+                "reversal promised, not yet credited" if pending else "transaction reversed: money returned"
+            )
+            return (
+                (Intent.REFUND_INITIATED, 0.72) if pending else (Intent.REFUND_CREDITED, 0.75)
+            ) + (evidence, flags)
 
-    # 4. Logistics (before OTP: delivery handover codes are not auth OTPs) --
+    # 3.5 Demat: dividends, IPO, corporate actions, order executions --------
+    # These describe shares, not rupees. Checked before generic money language
+    # because "Rs 120 dividend credited" is income, not spending, and "10 shares
+    # of INFY bought" moves no money in this message at all.
+    if _any(DIVIDEND_PATTERNS, lower):
+        evidence.append("dividend language")
+        return Intent.DIVIDEND, 0.88, evidence, flags
+    ipo_hit = _any(IPO_PATTERNS, lower)
+    if ipo_hit:
+        evidence.append(f"IPO/ASBA language ({ipo_hit.strip()})")
+        return Intent.IPO, 0.85, evidence, flags
+    corp_hit = _any(CORPORATE_ACTION_PATTERNS, lower)
+    if corp_hit:
+        evidence.append(f"corporate action ({corp_hit.strip()})")
+        return Intent.CORPORATE_ACTION, 0.85, evidence, flags
+    trade_hit = _any(TRADE_PATTERNS, lower)
+    # A SIP debit reads like an allotment ("units allotted") but the money really
+    # did leave the bank account. When a debit verb names an account, this is a
+    # bank message: it falls through to INVESTMENT so the rupees are excluded as
+    # an investment rather than silently dropped as "no money in this message".
+    money_in_bank = bool(DEBIT_VERBS.search(lower)) and bool(
+        re.search(r"\b(?:a/c|acct|account|xx\d{4}|\*{2,}\d{4})\b", lower)
+    )
+    if trade_hit and not money_in_bank and not (ctx.balance is not None and DEBIT_VERBS.search(ctx.text)):
+        evidence.append(f"trade language ({trade_hit.strip()})")
+        return Intent.TRADE, 0.8, evidence, flags
+
+    # 4. Travel and logistics (before OTP: handover codes are not auth OTPs) --
+    # A ticket is a booking, a parcel is a delivery, and the two must not be
+    # mixed: one is retained until the journey, the other is dead on arrival.
+    money_moved = _money_already_moved(lower, amount, ctx.pnr)
+    is_travel = _any(TRAVEL_PATTERNS, lower)
+    if is_travel and not TRACKING_ONLY.search(lower) and not money_moved:
+        mode_hit = next((mode for mode, pat in TRAVEL_MODE_PATTERNS if re.search(pat, lower)), "other")
+        evidence.append(f"travel booking ({mode_hit})" + (f" / PNR {ctx.pnr}" if ctx.pnr else ""))
+        return Intent.TRAVEL, 0.88 if ctx.pnr else 0.8, evidence, flags
+
     is_status = _any(LOGISTICS_PATTERNS, lower)
-    if ctx.pnr or ctx.tracking or is_status or ctx.handover:
+    if (ctx.pnr or ctx.tracking or is_status or ctx.handover) and not money_moved:
         handover_ok = bool(ctx.handover and DELIVERY_CONTEXT.search(ctx.text) and not AUTH_CONTEXT.search(ctx.text))
         if ctx.pnr or ctx.tracking or is_status or handover_ok:
             if ctx.handover and handover_ok:
@@ -303,9 +480,15 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
             return Intent.LOGISTICS, 0.85 if (ctx.pnr or ctx.tracking) else 0.72, evidence, flags
 
     # 5. OTP ---------------------------------------------------------------
-    if ctx.otp:
+    if ctx.otp and not money_moved:
         evidence.append(f"OTP keyword '{ctx.otp[1]}' with a nearby code")
         return Intent.OTP, 0.9, evidence, flags
+    if ctx.otp and money_moved:
+        # "Rs 5,000 credited to A/c XX4092. Do not share OTP 482913." The money
+        # really moved, so it belongs in the ledger; the OTP is still treated as
+        # a secret (masked in storage, never sent anywhere).
+        evidence.append("OTP warning alongside a completed money movement")
+        flags.append("otp_present")
 
     # 6. FASTag ------------------------------------------------------------
     if re.search(r"\bfastag\b", lower):
@@ -334,6 +517,11 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
     if invest and (amount or re.search(r"\b(?:units?|nav|folio|allotment)\b", lower)):
         evidence.append(f"investment language ({invest.strip()})")
         return Intent.INVESTMENT, 0.75, evidence, flags
+    if amount and re.search(r"\b(?:fund\s*transfer|money\s+added|add\s+money)\b", lower) and re.search(
+        r"\b(?:zerodha|groww|upstox|angel\s*one|indmoney|kuvera|coin|mutual\s+fund|sip)\b", lower
+    ):
+        evidence.append("broker/scheme transfer language")
+        return Intent.INVESTMENT, 0.72, evidence, flags
 
     # 10. Pre-debit notices / mandates ------------------------------------
     upcoming = _any(UPCOMING_DEBIT_PATTERNS, lower)
@@ -343,7 +531,10 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
 
     # 11. Bill due ---------------------------------------------------------
     bill = _any(BILL_DUE_PATTERNS, lower)
-    if bill and (amount or ctx.total_due or ctx.minimum_due):
+    # "Rs 3,499 spent at CROMA … Total due Rs 12,480" is a spend with a running
+    # balance, not a bill. A movement verb outranks the due line.
+    spend_sentence = DEBIT_VERBS.search(lower) and not re.search(r"\b(?:card|bill)\s+payment\b", lower)
+    if bill and (amount or ctx.total_due or ctx.minimum_due) and not spend_sentence:
         evidence.append(f"bill/statement due language ({bill.strip()})")
         return Intent.BILL_DUE, 0.78, evidence, flags
 
@@ -384,9 +575,21 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
             ["bank_marketing"] if bank_like else [],
         )
 
+    # 13.7 Own-account moves ------------------------------------------------
+    # A transfer between the user's own accounts is not spending; it is the same
+    # rupee changing pocket. Checked before the generic debit rule.
+    self_move = _any(SELF_TRANSFER_PATTERNS, lower)
+    self_verb = DEBIT_VERBS.search(ctx.text)
+    if self_move and self_verb:
+        evidence.append(f"own-account transfer ({self_move.strip()}) with '{self_verb.group(0)}'")
+        return Intent.SELF_TRANSFER, 0.85, evidence, flags
+
     # 14. Real money movement ---------------------------------------------
     debit = DEBIT_VERBS.search(ctx.text)
-    credit = CREDIT_VERBS.search(ctx.text)
+    # "Credit Card" and "credit limit" are nouns, not credits. Matching them as
+    # a credit verb made every card payment read as ambiguous.
+    credit_text = re.sub(r"credit\s+(?:card|limit)", " ", ctx.text, flags=re.IGNORECASE)
+    credit = CREDIT_VERBS.search(credit_text)
     if amount:
         if debit and not credit:
             evidence.append(f"debit verb '{debit.group(0)}' with amount")
@@ -478,6 +681,21 @@ def _otp_purpose(lower: str) -> tuple[str, str]:
     return "unknown", "low"
 
 
+#: Intents where a message date means "this happened on", not "this is due on".
+_MOVEMENT_INTENTS = {
+    Intent.EXPENSE,
+    Intent.INCOME,
+    Intent.SELF_TRANSFER,
+    Intent.CC_BILL_PAYMENT,
+    Intent.REFUND_CREDITED,
+    Intent.REFUND_INITIATED,
+    Intent.CASH_WITHDRAWAL,
+    Intent.INSTRUMENT_LOAD,
+    Intent.INVESTMENT,
+    Intent.FASTAG_TOLL,
+}
+
+
 def _summary(intent: Intent, amount: Optional[float], merchant: Optional[Merchant], institution: Optional[Institution], extra: str = "") -> str:
     who = (merchant.clean if merchant and merchant.clean else None) or (institution.name if institution else None) or ""
     if intent == Intent.EXPENSE:
@@ -508,6 +726,16 @@ def _summary(intent: Intent, amount: Optional[float], merchant: Optional[Merchan
         return f"OTP for {extra}".strip()
     if intent == Intent.VOUCHER_ISSUED:
         return f"Voucher {extra}".strip()
+    if intent == Intent.TRAVEL:
+        return f"Travel booking {extra}".strip()
+    if intent == Intent.TRADE:
+        return f"Trade {extra}".strip()
+    if intent == Intent.DIVIDEND:
+        return f"Dividend {_fmt_inr(amount)} {extra}".strip()
+    if intent == Intent.IPO:
+        return f"IPO update {extra}".strip()
+    if intent == Intent.CORPORATE_ACTION:
+        return f"Corporate action {extra}".strip()
     if intent == Intent.LOGISTICS:
         return f"Delivery/travel update {extra}".strip()
     if intent == Intent.GOVT_NOTICE:
@@ -519,6 +747,111 @@ def _summary(intent: Intent, amount: Optional[float], merchant: Optional[Merchan
     if intent == Intent.PHISHING_SUSPECT:
         return "Suspected phishing — do not tap links"
     return "Unclassified message"
+
+
+_ROUTE_RE = re.compile(
+    r"\bfrom\s+(?P<origin>[A-Z][A-Za-z ]{2,20}?)\s+to\s+(?P<destination>[A-Z][A-Za-z ]{2,20}?)(?:\s+on|\s*[,.]|$)",
+    re.IGNORECASE,
+)
+_ROUTE_ARROW_RE = re.compile(
+    r"\b(?P<origin>[A-Z][A-Za-z ]{2,20}?)\s*(?:->|→|to)\s*(?P<destination>[A-Z][A-Za-z ]{2,20}?)\s+(?:on|at|bus|train|flight)\b",
+    re.IGNORECASE,
+)
+#: "Bengaluru to Chennai, 2 passengers" — case-sensitive on purpose, because
+#: "Rs 500 to VPA" lowercased would otherwise look like a route.
+_ROUTE_PAIR_RE = re.compile(
+    r"\b(?P<origin>[A-Z][a-z]{2,18})\s+to\s+(?P<destination>[A-Z][a-z]{2,18})\s*(?:,|\.|$)"
+)
+_PASSENGERS_RE = re.compile(r"\b(?P<count>\d)\s*(?:adult|passenger|pax|traveller)", re.IGNORECASE)
+
+
+def _route(text: str) -> tuple[Optional[str], Optional[str]]:
+    """Origin/destination, only when the message spells the pattern out.
+
+    Deliberately narrow: guessing a city from a station code is how a Delhi
+    traveller ends up with a Chennai itinerary.
+    """
+    for pattern in (_ROUTE_RE, _ROUTE_ARROW_RE, _ROUTE_PAIR_RE):
+        match = pattern.search(text)
+        if match:
+            origin = match.group("origin").strip(" .")
+            destination = match.group("destination").strip(" .")
+            if origin.lower() != destination.lower():
+                return origin, destination
+    return None, None
+
+
+def _passenger_count(lower: str) -> Optional[int]:
+    match = _PASSENGERS_RE.search(lower)
+    return int(match.group("count")) if match else None
+
+
+def _trade_info(
+    intent: "Intent",
+    text: str,
+    lower: str,
+    merchant: Optional["Merchant"],
+    template_hit: Optional[templates.TemplateHit],
+    amount_hit: Optional[extract.AmountHit],
+    ctx: "_Ctx",
+) -> "TradeInfo":
+    """Describe the security. Never the rupees — those belong to another message."""
+    scheme = extract.find_scheme(text)
+    symbol = extract.find_symbol(text) or (merchant.raw if merchant and merchant.raw and merchant.raw.isupper() else None)
+    if scheme:
+        # A mutual-fund allotment names a scheme, not a ticker. Reporting
+        # "PARAG PARIKH FLEXI CAP" as a symbol would break any later price lookup.
+        symbol = None
+    quantity = extract.find_quantity(text)
+    price = None
+    price_match = re.search(
+        r"(?:@|\bat\b|\bnav(?:\s+of)?)\s*(?:Rs\.?\s*|INR\s*)?(?P<price>[\d,]+(?:\.\d{1,2})?)\s*(?:per\s+share)?",
+        text,
+        re.IGNORECASE,
+    )
+    if price_match:
+        try:
+            price = float(price_match.group("price").replace(",", ""))
+        except ValueError:
+            price = None
+    if template_hit is not None:
+        if not quantity and template_hit.fields.get("quantity"):
+            quantity = extract.find_quantity(template_hit.fields["quantity"] + " qty")
+        if price is None and template_hit.fields.get("price"):
+            try:
+                price = float(template_hit.fields["price"].replace(",", ""))
+            except ValueError:
+                price = None
+        symbol = symbol or (template_hit.merchant if template_hit.template_id.startswith("broker.") else None)
+
+    if intent is Intent.DIVIDEND:
+        kind = "dividend"
+    elif intent is Intent.IPO:
+        kind = "ipo_refund" if re.search(r"\brefund|unblock", lower) else ("ipo_allot" if re.search(r"\ballot", lower) else "ipo_apply")
+    elif intent is Intent.CORPORATE_ACTION:
+        kind = (
+            "bonus"
+            if "bonus" in lower
+            else "split"
+            if "split" in lower or "sub-division" in lower
+            else "rights"
+            if "rights" in lower
+            else "buyback"
+        )
+    else:
+        kind = "sell" if re.search(r"\b(?:sold|sell|selling|sale)\b", lower) else "buy"
+
+    return TradeInfo(
+        kind=kind,  # type: ignore[arg-type]
+        symbol=symbol,
+        isin=extract.find_isin(text),
+        quantity=quantity,
+        price=price,
+        exchange="NSE" if re.search(r"\bnse\b", lower) else "BSE" if re.search(r"\bbse\b", lower) else None,
+        broker=merchant.clean if merchant else None,
+        scheme=scheme,
+        folio=(m.group(1) if (m := re.search(r"\bfolio\b[^A-Za-z0-9]{0,4}([A-Z0-9]{3,12})", text, re.IGNORECASE)) else None),
+    )
 
 
 def _nearest_future(dates: list[extract.DateHit], now: datetime) -> Optional[datetime]:
@@ -542,6 +875,16 @@ def analyse(
     sender = extract.parse_sender(sender_raw)
     ctx = _build_context(text, sender, now)
 
+    # Bank-specific templates fill gaps the generic extractors leave (and audit
+    # which sentence shape was recognised).
+    template_hit = templates.match(text, sender_raw)
+    if template_hit is not None:
+        if ctx.balance is None and template_hit.balance is not None:
+            ctx.balance = template_hit.balance
+        evidence_hint = f"matched {template_hit.bank} template {template_hit.template_id}"
+    else:
+        evidence_hint = None
+
     intent, score, evidence, flags = _decide(ctx)
 
     # An upsell inside a real transaction is not a separate event. Keep the
@@ -556,28 +899,53 @@ def analyse(
         score = min(score, 0.55)
 
     institution = _detect_institution(text, sender)
-    if institution and ctx.last4:
-        digit_only = ctx.last4
+    last4 = ctx.last4 or (template_hit.last4 if template_hit else None)
+    if institution and last4:
+        digit_only = last4
         if re.search(r"\bcard\b", ctx.lower):
             institution.card_last4 = digit_only
         else:
             institution.account_last4 = digit_only
 
-    merchant_raw = extract.find_merchant_raw(text)
+    merchant_raw = extract.find_merchant_raw(text) or (template_hit.merchant if template_hit else None)
     merchant: Optional[Merchant] = None
     if merchants is not None:
-        match = merchants.lookup(merchant_raw or "") or merchants.lookup(text)
+        match = merchants.resolve(merchant_raw or "") or merchants.resolve(text)
         if match:
             merchant = Merchant(raw=merchant_raw or match.raw, clean=match.clean, category=match.category, source=match.source, confidence=match.score)
-            if merchant_raw:
+            if merchant_raw and re.search(r"[A-Za-z]{3}", merchant_raw):
                 merchants.learn(merchant_raw, match.clean, match.category, source="learned")
     if merchant is None and merchant_raw:
         merchant = Merchant(raw=merchant_raw, source="none", confidence=0.3)
         flags.append("merchant_unresolved")
+    if merchant is None and institution is not None and intent == Intent.EXPENSE:
+        # A carrier or a brand can be the payee in its own message: "Recharge of
+        # Rs 349 successful" from AD-JIO-S is spending at Jio. Banks are
+        # deliberately excluded: their SMS names the account, not a shop, so
+        # "SMS charges" must not become a merchant called HDFC Bank.
+        if institution.kind in {EntityKind.TELECOM, EntityKind.BRAND}:
+            category = catalog.category_of_clean(institution.name) or "Uncategorized"
+            merchant = Merchant(
+                raw=institution.name,
+                clean=institution.name,
+                category=category,
+                source="institution",
+                confidence=0.6,
+            )
 
     amount_hit = ctx.amount
     amount = None
-    if amount_hit:
+    if amount_hit is None and template_hit is not None and template_hit.amount is not None:
+        # The bank's own template found an amount the generic patterns missed.
+        direction = "credit" if template_hit.kind == "credit" else "debit"
+        amount = Amount(
+            value=template_hit.amount,
+            currency="INR",
+            raw=str(template_hit.fields.get("amount", "")),
+            direction=direction,  # type: ignore[arg-type]
+            balance_after=ctx.balance,
+        )
+    elif amount_hit:
         direction = amount_hit.direction
         if intent == Intent.INCOME or intent == Intent.REFUND_CREDITED:
             direction = "credit"
@@ -591,6 +959,15 @@ def analyse(
             balance_after=ctx.balance,
             credit_limit_after=ctx.credit_limit,
         )
+
+    if amount is not None and amount.value <= 0:
+        # "Rs 0.00 debited" is a system message, not a payment. Keeping it as a
+        # zero-rupee expense just clutters the ledger.
+        amount = None
+        flags.append("zero_amount")
+
+    if evidence_hint:
+        evidence.append(evidence_hint)
 
     event = SmsEvent(
         received_at=now,
@@ -607,6 +984,21 @@ def analyse(
         evidence=evidence,
         flags=flags,
     )
+
+    # A declined or failed transaction moved nothing. Saying so explicitly is
+    # better than an "expense" of money that never left the account.
+    if (
+        event.intent in {Intent.EXPENSE, Intent.UNKNOWN}
+        and _DECLINED.search(ctx.lower)
+        and not re.search(r"\b(?:reversed|refunded|declined\s+fee)\b", ctx.lower)
+    ):
+        event.evidence.append("transaction was declined: no money moved")
+        event.flags.append("declined_transaction")
+        event.intent = Intent.UNKNOWN
+        event.domain = DOMAIN_BY_INTENT.get(Intent.UNKNOWN, "other")
+        event.amount = None
+        event.ledger = Ledger.for_intent(Intent.UNKNOWN)
+        event.confidence = Confidence.from_score(min(event.confidence.score, 0.45))
 
     # ---- intent-specific enrichment -------------------------------------
     extra = ""
@@ -657,6 +1049,67 @@ def analyse(
             extra = f"on {event.reminder.due_date:%d %b %Y}"
         if biller:
             extra = f"{biller} {extra}".strip()
+
+    elif intent == Intent.TRAVEL:
+        mode = next((m for m, pat in TRAVEL_MODE_PATTERNS if re.search(pat, ctx.lower)), "other")
+        provider = next((name for name, pat in TRAVEL_PROVIDERS if re.search(pat, ctx.lower)), None)
+        origin, destination = _route(text)
+        travel_status = "confirmed"
+        for keyword, label in (
+            ("cancelled", "cancelled"),
+            ("canceled", "cancelled"),
+            ("delayed", "delayed"),
+            ("late by", "delayed"),
+            ("rescheduled", "rescheduled"),
+            ("diverted", "diverted"),
+            ("chart prepared", "chart_prepared"),
+            ("waitlist", "waitlisted"),
+            ("wl", "waitlisted"),
+            ("confirmed", "confirmed"),
+        ):
+            if re.search(rf"\b{re.escape(keyword)}\b", ctx.lower):
+                travel_status = label
+                break
+        event.logistics = LogisticsInfo(
+            mode=mode,  # type: ignore[arg-type]
+            status=travel_status,
+            provider=provider or (merchant.clean if merchant else None),
+            pnr=ctx.pnr,
+            journey_number=extract.find_journey(text),
+            seat=extract.find_seat(text),
+            origin=origin,
+            destination=destination,
+            passengers=_passenger_count(ctx.lower),
+            event_at=_nearest_future(ctx.dates, now),
+        )
+        bits = [
+            event.logistics.provider or "",
+            f"PNR {ctx.pnr}" if ctx.pnr else "",
+            f"{origin} to {destination}" if origin and destination else "",
+        ]
+        extra = " ".join(b for b in bits if b)
+
+    elif intent in {Intent.TRADE, Intent.DIVIDEND, Intent.IPO, Intent.CORPORATE_ACTION}:
+        event.trade = _trade_info(intent, text, ctx.lower, merchant, template_hit, amount_hit, ctx)
+        trade = event.trade
+        # A trade confirmation quotes a price, not a payment. When the only rupee
+        # figure in the message is the price ("NAV Rs 75.20", "@ Rs 1,450"), the
+        # money leg is missing and inventing an amount would double-count it.
+        if (
+            intent is Intent.TRADE
+            and event.amount is not None
+            and trade.price is not None
+            and abs(event.amount.value - trade.price) < 0.005
+        ):
+            event.amount = None
+            event.evidence.append("only rupee figure was the per-unit price, not a payment")
+        name = trade.symbol or trade.scheme or ""
+        bits = [
+            f"{trade.quantity:g} {name}".strip() if trade.quantity else name,
+            f"@ ₹{trade.price:,.2f}" if trade.price else "",
+            trade.broker or "",
+        ]
+        extra = " ".join(b for b in bits if b)
 
     elif intent == Intent.LOGISTICS:
         mode = "parcel"
@@ -719,6 +1172,27 @@ def analyse(
         extra = kind
 
     event.ledger = Ledger.for_intent(intent)
+    if (
+        event.amount is not None
+        and event.amount.currency.upper() != "INR"
+        and event.ledger.treatment in {LedgerTreatment.EXPENSE, LedgerTreatment.INCOME}
+    ):
+        # A foreign-currency swipe is real spending, but the rupee figure is not
+        # in the message. Keeping the face value would put ₹12.99 in the ledger
+        # for a $12.99 charge.
+        event.ledger = Ledger(
+            treatment=LedgerTreatment.FOREIGN_CURRENCY,
+            counts_toward_spend=False,
+            counts_as_income=False,
+            reduces_spend=False,
+            reason=(
+                f"amount is in {event.amount.currency}; the rupee value is unknown until "
+                "the bank posts the conversion"
+            ),
+        )
+        event.flags.append("foreign_currency")
+        flags.append("foreign_currency")
+        evidence.append(f"foreign-currency amount ({event.amount.currency}); kept out of rupee totals")
     normalised = normalize_text(body)
     event.analysis = {
         # Which Indian scripts the message used, and how many phrases we had to
@@ -728,6 +1202,7 @@ def analyse(
         "digit_scripts": normalised.digit_scripts,
         "translations": normalised.translations,
         "multilingual": normalised.is_multilingual,
+        "template": template_hit.as_dict() if template_hit is not None else None,
         "rail": _rail(ctx.lower),
         "reference": ctx.reference,
         "upi_rrn": ctx.rrn,
@@ -753,6 +1228,12 @@ def analyse(
         rationale=route.rationale,
     )
     event.confidence = Confidence.from_score(score)
+    if event.ledger.treatment is LedgerTreatment.FOREIGN_CURRENCY:
+        event.confidence = Confidence(
+            score=min(score, 0.45),
+            band="low",
+            needs_review=True,
+        )
     event.dedup = DedupInfo()
 
     redaction = redact(
@@ -762,4 +1243,13 @@ def analyse(
     )
     event.redacted_body = redaction.text
     event.analysis["redaction"] = redaction.replaced
+
+    # The bank's own date, not the delivery time. A message that arrives after
+    # midnight ("... on 28-02-25") belongs to February, and weekly/monthly
+    # totals must agree with the statement. Only movement intents get one:
+    # a bill's due date is not the day it was paid.
+    if intent in _MOVEMENT_INTENTS and ctx.dates:
+        past = [hit.value for hit in ctx.dates if hit.value.date() <= now.date()]
+        if past:
+            event.analysis["posted_on"] = max(past).date().isoformat()
     return event

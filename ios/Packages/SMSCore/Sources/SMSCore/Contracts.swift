@@ -30,6 +30,11 @@ public enum SMSEventIntent: String, CaseIterable, Codable, Sendable {
     case otp = "otp"
     case voucherIssued = "voucher_issued"
     case logistics = "logistics"
+    case travel = "travel"
+    case trade = "trade"
+    case dividend = "dividend"
+    case ipo = "ipo"
+    case corporateAction = "corporate_action"
     case govtNotice = "govt_notice"
     case health = "health"
     case bankUpsell = "bank_upsell"
@@ -47,6 +52,7 @@ public enum LedgerTreatment: String, CaseIterable, Codable, Sendable {
     case instrumentLoad = "instrument_load"
     case cashWithdrawal = "cash_withdrawal"
     case investment = "investment"
+    case foreignCurrency = "foreign_currency"
     case none = "none"
 
     /// Only these two ever move the spend / income ring.

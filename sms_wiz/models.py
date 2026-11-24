@@ -54,6 +54,11 @@ class Intent(str, Enum):
     OTP = "otp"
     VOUCHER_ISSUED = "voucher_issued"
     LOGISTICS = "logistics"
+    TRAVEL = "travel"  # ticket / itinerary: a booking record, not a second payment
+    TRADE = "trade"  # demat order execution: shares moved, money moved elsewhere
+    DIVIDEND = "dividend"
+    IPO = "ipo"  # ASBA application, block, allotment, refund
+    CORPORATE_ACTION = "corporate_action"  # bonus, split, rights, buyback
     GOVT_NOTICE = "govt_notice"
     HEALTH = "health"
     BANK_UPSELL = "bank_upsell"  # standalone loan / EMI / insurance pitch
@@ -72,6 +77,11 @@ class LedgerTreatment(str, Enum):
     INSTRUMENT_LOAD = "instrument_load"
     CASH_WITHDRAWAL = "cash_withdrawal"
     INVESTMENT = "investment"
+    #: The message is money, but not in rupees. Counting "USD 12.99" as ₹12.99
+    #: would understate a card bill by a factor of ~87, so it is excluded from
+    #: the rupee totals and surfaced for review until the bank posts the
+    #: converted amount in its own SMS.
+    FOREIGN_CURRENCY = "foreign_currency"
     NONE = "none"
 
 
@@ -202,15 +212,51 @@ class ReminderInfo(BaseModel):
 
 
 class LogisticsInfo(BaseModel):
-    mode: Literal["train", "flight", "parcel", "quick_commerce", "cab", "other"] = "other"
+    mode: Literal["train", "bus", "flight", "hotel", "parcel", "quick_commerce", "cab", "other"] = "other"
     status: Optional[str] = None
     provider: Optional[str] = None
     pnr: Optional[str] = None
     tracking_id: Optional[str] = None
     journey_number: Optional[str] = None
     seat: Optional[str] = None
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    passengers: Optional[int] = None
     event_at: Optional[datetime] = None
     handover_code: Optional[str] = None
+
+
+class TradeInfo(BaseModel):
+    """A demat / mutual-fund event. Deliberately not in rupees.
+
+    The rupee leg (if any) arrives as its own bank message, so these fields
+    describe the security, not the payment: quantity, price, ISIN and broker.
+    """
+
+    kind: Literal[
+        "buy",
+        "sell",
+        "sip",
+        "ipo_apply",
+        "ipo_allot",
+        "ipo_refund",
+        "dividend",
+        "bonus",
+        "split",
+        "rights",
+        "buyback",
+        "fund_transfer",
+        "pledge",
+        "other",
+    ] = "other"
+    symbol: Optional[str] = None
+    isin: Optional[str] = None
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    exchange: Optional[str] = None
+    broker: Optional[str] = None
+    folio: Optional[str] = None
+    scheme: Optional[str] = None
 
 
 class GovInfo(BaseModel):
@@ -279,7 +325,13 @@ class Ledger(BaseModel):
         rules: dict[Intent, tuple[LedgerTreatment, bool, bool, bool, str]] = {
             Intent.EXPENSE: (LedgerTreatment.EXPENSE, True, False, False, "real outflow"),
             Intent.FASTAG_TOLL: (LedgerTreatment.EXPENSE, True, False, False, "toll is real spend"),
-            Intent.GOVT_NOTICE: (LedgerTreatment.EXPENSE, False, False, False, "govt notice: only counted when a payment is confirmed"),
+            Intent.GOVT_NOTICE: (
+                LedgerTreatment.NONE,
+                False,
+                False,
+                False,
+                "govt notice: a demand, not a payment; counted only when the payment itself arrives",
+            ),
             Intent.INCOME: (LedgerTreatment.INCOME, False, True, False, "money received"),
             Intent.REFUND_CREDITED: (LedgerTreatment.REFUND, False, False, True, "refund reduces earlier spend"),
             Intent.CC_BILL_PAYMENT: (
@@ -317,6 +369,41 @@ class Ledger(BaseModel):
                 False,
                 "investment is a transfer of capital, not consumption",
             ),
+            Intent.DIVIDEND: (
+                LedgerTreatment.INCOME,
+                False,
+                True,
+                False,
+                "dividend received is income, and taxable",
+            ),
+            Intent.TRADE: (
+                LedgerTreatment.NONE,
+                False,
+                False,
+                False,
+                "an order execution moves shares; the rupees are in the bank/broker message",
+            ),
+            Intent.IPO: (
+                LedgerTreatment.NONE,
+                False,
+                False,
+                False,
+                "ASBA blocks and allotments are not spending; the debit, if any, is its own event",
+            ),
+            Intent.CORPORATE_ACTION: (
+                LedgerTreatment.NONE,
+                False,
+                False,
+                False,
+                "bonus/split/rights change holdings, not money",
+            ),
+            Intent.TRAVEL: (
+                LedgerTreatment.NONE,
+                False,
+                False,
+                False,
+                "a ticket is a booking record; the money is the bank debit for the same amount",
+            ),
         }
         if intent in rules:
             treatment, spend, income, reduces, reason = rules[intent]
@@ -349,6 +436,7 @@ class SmsEvent(BaseModel):
     voucher: Optional[VoucherInfo] = None
     reminder: Optional[ReminderInfo] = None
     logistics: Optional[LogisticsInfo] = None
+    trade: Optional[TradeInfo] = None
     gov: Optional[GovInfo] = None
     links: list[LinkInfo] = Field(default_factory=list)
 
@@ -396,6 +484,8 @@ class FilterQuery(BaseModel):
 class FilterResponse(BaseModel):
     action: AppleAction
     subAction: AppleSubAction = AppleSubAction.NONE
+    #: Only present when the answer is a fallback rather than a decision.
+    reason: Optional[str] = None
 
 
 class MonthSummary(BaseModel):

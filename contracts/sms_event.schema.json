@@ -290,6 +290,11 @@
         "otp",
         "voucher_issued",
         "logistics",
+        "travel",
+        "trade",
+        "dividend",
+        "ipo",
+        "corporate_action",
         "govt_notice",
         "health",
         "bank_upsell",
@@ -340,6 +345,7 @@
         "instrument_load",
         "cash_withdrawal",
         "investment",
+        "foreign_currency",
         "none"
       ],
       "title": "LedgerTreatment",
@@ -387,6 +393,18 @@
     },
     "LogisticsInfo": {
       "properties": {
+        "destination": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Destination"
+        },
         "event_at": {
           "anyOf": [
             {
@@ -428,7 +446,9 @@
           "default": "other",
           "enum": [
             "train",
+            "bus",
             "flight",
+            "hotel",
             "parcel",
             "quick_commerce",
             "cab",
@@ -436,6 +456,30 @@
           ],
           "title": "Mode",
           "type": "string"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin"
+        },
+        "passengers": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Passengers"
         },
         "pnr": {
           "anyOf": [
@@ -818,6 +862,130 @@
       "title": "SenderInfo",
       "type": "object"
     },
+    "TradeInfo": {
+      "description": "A demat / mutual-fund event. Deliberately not in rupees.\n\nThe rupee leg (if any) arrives as its own bank message, so these fields\ndescribe the security, not the payment: quantity, price, ISIN and broker.",
+      "properties": {
+        "broker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Broker"
+        },
+        "exchange": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exchange"
+        },
+        "folio": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Folio"
+        },
+        "isin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isin"
+        },
+        "kind": {
+          "default": "other",
+          "enum": [
+            "buy",
+            "sell",
+            "sip",
+            "ipo_apply",
+            "ipo_allot",
+            "ipo_refund",
+            "dividend",
+            "bonus",
+            "split",
+            "rights",
+            "buyback",
+            "fund_transfer",
+            "pledge",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quantity"
+        },
+        "scheme": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheme"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "title": "TradeInfo",
+      "type": "object"
+    },
     "VoucherInfo": {
       "properties": {
         "brand": {
@@ -1066,6 +1234,17 @@
       "default": "",
       "title": "Summary",
       "type": "string"
+    },
+    "trade": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TradeInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "voucher": {
       "anyOf": [

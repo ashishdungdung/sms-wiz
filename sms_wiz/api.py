@@ -14,12 +14,16 @@ from unknown senders, with the one message body it is deciding about.
 
 from __future__ import annotations
 
+import hmac
 import os
+import re
 from typing import Any, Optional
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
+from . import analytics, cards, notify, rules, subscriptions, templates
+from .catalog import CATEGORIES as CATEGORY_TAXONOMY
 from .classify import analyse
 from .db import connect
 from .merchants import MerchantDictionary
@@ -33,6 +37,7 @@ from .models import (
     MonthSummary,
     SmsEvent,
 )
+from . import extract
 from .pipeline import Ingestor
 from .store import (
     list_alerts,
@@ -46,9 +51,36 @@ from .store import (
 DEFAULT_DB = os.environ.get("SMSWIZ_DB", "sms_wiz.db")
 
 
+_MONTH_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+
+
+def _check_month(month: Optional[str]) -> Optional[str]:
+    """A month is ``YYYY-MM``. Silently returning an empty list for ``2026-13``
+    looks like "you spent nothing", which is a lie a ledger must not tell."""
+    if month is None:
+        return None
+    if not _MONTH_RE.match(month):
+        raise HTTPException(status_code=422, detail=f"month must be YYYY-MM, got {month!r}")
+    return month
+
+
+def _expected_token() -> Optional[str]:
+    return os.environ.get("SMSWIZ_TOKEN") or None
+
+
+def _token_ok(token: Optional[str]) -> bool:
+    expected = _expected_token()
+    if not expected:
+        return True
+    if not token:
+        return False
+    # Constant-time: a shared secret compared with == leaks its prefix length
+    # through timing, which is enough to guess it one character at a time.
+    return hmac.compare_digest(token, expected)
+
+
 def _check_token(token: Optional[str]) -> None:
-    expected = os.environ.get("SMSWIZ_TOKEN")
-    if expected and token != expected:
+    if not _token_ok(token):
         raise HTTPException(status_code=401, detail="invalid or missing X-SMSWiz-Token")
 
 
@@ -73,7 +105,7 @@ def _filter_payload(payload: dict[str, Any]) -> tuple[str, str]:
         )
         if body:
             return str(sender), str(body)
-    raise HTTPException(status_code=400, detail="no message body found in payload")
+    return "", ""
 
 
 def create_app(db_path: Optional[str] = None) -> FastAPI:
@@ -92,6 +124,27 @@ def create_app(db_path: Optional[str] = None) -> FastAPI:
 
     def conn():
         return connect(db)
+
+    @app.middleware("http")
+    async def require_token(request, call_next):
+        """One gate for the whole API.
+
+        The token used to be checked handler by handler, which meant every new
+        read endpoint was unauthenticated until somebody remembered. The data
+        behind these routes is a bank statement: amounts, merchants, balances.
+        ``/`` (the landing page) and ``/health`` stay open so the phone can find
+        the server before it has a token.
+        """
+        path = request.url.path
+        if (
+            path.startswith("/api/")
+            and request.method != "OPTIONS"
+            and not _token_ok(request.headers.get("x-smswiz-token"))
+        ):
+            return JSONResponse(
+                {"detail": "invalid or missing X-SMSWiz-Token"}, status_code=401
+            )
+        return await call_next(request)
 
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -202,22 +255,47 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         """Answer Apple's network-deferral query. Keep it tiny and fast."""
         _check_token(x_sms_wiz_token)
         sender, body = _filter_payload(payload)
+        if not body.strip():
+            # Apple's extension must always get an answer it can act on. A 4xx
+            # here means the filter silently stops filtering; `allow` is the safe
+            # default because it changes nothing about the user's inbox.
+            return FilterResponse(
+                action=AppleAction.ALLOW,
+                subAction=AppleSubAction.NONE,
+                reason="no message body in the request; allowed rather than misfiled",
+            ).model_dump()
+        # Fast path: issuer-authored rules answer most folder decisions without
+        # touching the full chain. The chain still runs on ingest, where it is
+        # authoritative; this only has to beat Apple's deadline.
+        sender_info = extract.parse_sender(sender)
+        verdict = rules.evaluate(
+            sender,
+            body,
+            sender_kind=sender_info.entity_kind.value,
+        )
+        if verdict is not None:
+            return FilterResponse(action=verdict.action, subAction=verdict.sub_action).model_dump(
+                exclude_none=True
+            )
+
         event = analyse(body, sender, merchants=merchants, source="filter")
         return FilterResponse(
             action=event.routing.apple_action,
             subAction=event.routing.apple_subaction,
-        ).model_dump()
+        ).model_dump(exclude_none=True)
 
     @app.get("/api/v1/events")
     def events(
-        limit: int = Query(default=50, le=500),
+        limit: int = Query(default=50, ge=1, le=500),
         month: Optional[str] = None,
         needs_review: Optional[bool] = None,
         intent: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         c = conn()
         try:
-            return list_events(c, limit=limit, month=month, needs_review=needs_review, intent=intent)
+            return list_events(
+                c, limit=limit, month=_check_month(month), needs_review=needs_review, intent=intent
+            )
         finally:
             c.close()
 
@@ -291,7 +369,7 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         """
         c = conn()
         try:
-            rows = list_events(c, limit=500, month=month)
+            rows = list_events(c, limit=500, month=_check_month(month))
         finally:
             c.close()
         buckets: dict[str, dict[str, Any]] = {}
@@ -338,6 +416,192 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
             "promotional": [s.value for s in DECLARED_PROMOTIONAL],
             "note": "Apple allows up to five per group; iOS 18 has been reported to drop folders when more are declared.",
         }
+
+    # ------------------------------------------------------------------
+    # Analytics, subscriptions, cards — all derived from stored events
+    # ------------------------------------------------------------------
+
+    def _rows(limit: int = 2000) -> list[dict[str, Any]]:
+        c = conn()
+        try:
+            return list_events(c, limit=limit)
+        finally:
+            c.close()
+
+    @app.get("/api/v1/categories")
+    def category_taxonomy() -> list[dict[str, Any]]:
+        """The category taxonomy, with the group and essential flag."""
+        return [
+            {
+                "slug": c.slug,
+                "label": c.label,
+                "group": c.group,
+                "essential": c.essential,
+                "note": c.note,
+            }
+            for c in CATEGORY_TAXONOMY
+        ]
+
+    @app.get("/api/v1/overview")
+    def overview(month: Optional[str] = None) -> dict[str, Any]:
+        """One call for the home screen: month, weeks, trend, UPI, cards, top merchants."""
+        return analytics.overview(_rows(), month=_check_month(month))
+
+    @app.get("/api/v1/analytics/weekly")
+    def analytics_weekly(weeks: int = Query(default=8, ge=1, le=52)) -> list[dict[str, Any]]:
+        return analytics.weekly(_rows(), weeks=weeks)
+
+    @app.get("/api/v1/analytics/monthly")
+    def analytics_monthly(months: int = Query(default=6, ge=1, le=36)) -> list[dict[str, Any]]:
+        return analytics.monthly(_rows(), months=months)
+
+    @app.get("/api/v1/analytics/upi")
+    def analytics_upi(month: Optional[str] = None) -> dict[str, Any]:
+        month = _check_month(month)
+        rows = _rows()
+        if month:
+            rows = [r for r in rows if str(r.get("received_at", "")).startswith(month)]
+        return analytics.upi_stats(rows)
+
+    @app.get("/api/v1/analytics/investments")
+    def analytics_investments() -> dict[str, Any]:
+        """Units and corporate actions. Not a portfolio value — see `caveat`."""
+        return analytics.investment_book(_rows())
+
+    @app.get("/api/v1/analytics/travel")
+    def analytics_travel() -> dict[str, Any]:
+        return analytics.travel_log(_rows())
+
+    @app.get("/api/v1/analytics/bills")
+    def analytics_bills() -> dict[str, Any]:
+        """Due notices and paid utilities, kept apart from the spend total."""
+        return analytics.bill_calendar(_rows())
+
+    @app.get("/api/v1/subscriptions")
+    def subscription_list() -> dict[str, Any]:
+        rows = _rows()
+        return {
+            **subscriptions.summary(rows),
+            "price_changes": subscriptions.price_changes(rows)[:10],
+        }
+
+    @app.get("/api/v1/subscriptions/calendar")
+    def subscription_calendar(days: int = Query(default=45, ge=1, le=180)) -> list[dict[str, Any]]:
+        return subscriptions.calendar(_rows(), days=days)
+
+    @app.get("/api/v1/cards")
+    def card_list() -> dict[str, Any]:
+        return cards.summary(_rows())
+
+    # ------------------------------------------------------------------
+    # Merchants, templates, rules
+    # ------------------------------------------------------------------
+
+    @app.get("/api/v1/merchants/stats")
+    def merchant_stats() -> dict[str, Any]:
+        return {"stats": merchants.stats(), "categories": merchants.categories()}
+
+    @app.delete("/api/v1/merchants/{key}")
+    def merchant_delete(key: str) -> dict[str, Any]:
+        """Remove a user/learned row. Seeds are code and cannot be deleted here."""
+        deleted = merchants.forget(key)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not found, or a curated seed")
+        return {"status": "deleted", "key": key}
+
+    @app.get("/api/v1/templates")
+    def template_catalog() -> list[dict[str, Any]]:
+        return templates.catalog()
+
+    @app.get("/api/v1/rules")
+    def rule_catalog() -> dict[str, Any]:
+        active = rules.load()
+        return {**rules.stats(active), "rules": [r.as_dict() for r in active]}
+
+    @app.post("/api/v1/rules/evaluate")
+    def rule_evaluate(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """Debug endpoint: which offline rule fires for this message, if any."""
+        sender = str(payload.get("sender") or "")
+        body = str(payload.get("body") or "")
+        if not body:
+            raise HTTPException(status_code=400, detail="body is required")
+        kind = str(payload.get("sender_kind") or extract.parse_sender(sender).entity_kind.value)
+        verdict = rules.evaluate(sender, body, sender_kind=kind)
+        return {
+            "matched": verdict is not None,
+            "verdict": verdict.as_dict() if verdict else None,
+            "fallback": "full rule chain on ingest",
+        }
+
+    @app.post("/api/v1/filter/explain")
+    def filter_explain(
+        payload: dict[str, Any] = Body(...),
+        x_sms_wiz_token: Optional[str] = Header(default=None, alias="X-SMSWiz-Token"),
+    ) -> dict[str, Any]:
+        """Everything the filter decided, for debugging on a real device.
+
+        Never on Apple's path: the extension only ever gets {action, subAction}.
+        """
+        _check_token(x_sms_wiz_token)
+        sender, body = _filter_payload(payload)
+        if not body.strip():
+            # Apple's extension must always get an answer it can act on. A 4xx
+            # here means the filter silently stops filtering; `allow` is the safe
+            # default because it changes nothing about the user's inbox.
+            return FilterResponse(
+                action=AppleAction.ALLOW,
+                subAction=AppleSubAction.NONE,
+                reason="no message body in the request; allowed rather than misfiled",
+            ).model_dump()
+        event = analyse(body, sender, merchants=merchants, source="filter")
+        verdict = rules.evaluate(sender, body, sender_kind=event.sender.entity_kind.value)
+        return {
+            "rule": verdict.as_dict() if verdict else None,
+            "intent": event.intent.value,
+            "routing": {
+                "action": event.routing.apple_action.value,
+                "subAction": event.routing.apple_subaction.value,
+                "retention": event.routing.retention.value,
+            },
+            "confidence": event.confidence.model_dump(),
+            "flags": event.flags,
+            "evidence": event.evidence,
+            "forensics": {
+                "score": event.analysis.get("forensic_score"),
+                "reasons": event.analysis.get("forensic_reasons"),
+            },
+            "template": event.analysis.get("template"),
+        }
+
+    # ------------------------------------------------------------------
+    # Notifications and digest
+    # ------------------------------------------------------------------
+
+    @app.get("/api/v1/notifications")
+    def notification_plan(limit: int = Query(default=50, le=200)) -> list[dict[str, Any]]:
+        """Alerts as delivery decisions: push / digest / silent, quiet hours applied."""
+        c = conn()
+        try:
+            stored = list_alerts(c, limit=limit)
+        finally:
+            c.close()
+        planned = notify.plan(stored)
+        return [n.as_dict() for n in planned]
+
+    @app.get("/api/v1/digest")
+    def weekly_digest(days: int = Query(default=7, ge=1, le=90)) -> dict[str, Any]:
+        c = conn()
+        try:
+            stored = list_alerts(c, limit=500)
+        finally:
+            c.close()
+        planned = notify.plan(stored)
+        return notify.digest(planned, period=f"{days} days")
+
+    @app.get("/api/v1/health/llm")
+    def llm_health() -> dict[str, Any]:
+        """Whether enrichment is configured, and which providers are alive."""
+        return ingestor.enricher.health()
 
     return app
 

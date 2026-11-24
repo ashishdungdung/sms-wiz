@@ -37,7 +37,8 @@ class TestDeduplication:
         assert second.event.dedup.status == "suppressed_duplicate"
         assert second.event.dedup.duplicate_of == first.event.event_id
         assert second.duplicate_of == first.event.event_id
-        assert summarise_month(conn, NOW.strftime("%Y-%m")).spend_total == 1450.0
+        # Posted date, not delivery date: the body says 25-02-25.
+        assert summarise_month(conn, "2025-02").spend_total == 1450.0
         assert any(alert.kind == "duplicate_suppressed" for alert in second.alerts)
 
     def test_same_amount_different_reference_is_not_merged(self, ingestor, conn):
@@ -60,7 +61,7 @@ class TestDeduplication:
     def test_replaying_the_same_message_does_not_double_count(self, ingestor, conn):
         for _ in range(3):
             ingest(ingestor, "AD-HDFCBK-T", BANK_DEBIT)
-        assert summarise_month(conn, NOW.strftime("%Y-%m")).spend_total == 1450.0
+        assert summarise_month(conn, "2025-02").spend_total == 1450.0
 
 
 class TestRefundWatchdog:
@@ -167,11 +168,15 @@ class TestVaultAndQueues:
             "Payment of Rs 18,450.00 towards your ICICI Credit Card XX4092 has been received. Thank you.",
         )
         ingest(ingestor, "AD-PAYTM-S", "Rs 500 added to your UPI Lite balance.")
-        summary = summarise_month(conn, NOW.strftime("%Y-%m"))
-        assert summary.spend_total == 1450.0
-        assert summary.excluded_total == 18950.0
-        assert summary.excluded_reasons == {"internal_transfer": 18450.0, "instrument_load": 500.0}
-        assert summary.event_count == 3
+        # The HDFC message carries a date (25-02-25) so it posts to February;
+        # the other two carry none and fall back to the delivery day in March.
+        february = summarise_month(conn, "2025-02")
+        march = summarise_month(conn, "2025-03")
+        assert february.spend_total == 1450.0
+        assert february.excluded_total == 0.0
+        assert march.excluded_total == 18950.0
+        assert march.excluded_reasons == {"internal_transfer": 18450.0, "instrument_load": 500.0}
+        assert february.event_count + march.event_count == 3
 
     def test_unknown_message_is_queued_for_review(self, ingestor, conn):
         event = ingest(ingestor, "9876543210", "Hey, are we still meeting at 5?")

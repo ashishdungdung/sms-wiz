@@ -263,9 +263,11 @@ class TestPerksAndTravel:
             "AD-IRCTC-S",
             merchants,
         )
-        assert event.intent is Intent.LOGISTICS
+        # A ticket is a booking record now, not a delivery: TRAVEL, treatment none.
+        assert event.intent is Intent.TRAVEL
         assert event.logistics.mode == "train"
         assert event.logistics.pnr == "2459182736"
+        assert event.ledger.treatment.value == "none"
         assert event.logistics.seat == "B2 / 45"
 
     def test_government_challan(self, merchants):

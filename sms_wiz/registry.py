@@ -7,6 +7,8 @@ codes are *not* guessed — they come back as unknown with ``needs_review``.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from .models import AppleAction, AppleSubAction, EntityKind, Intent, Retention
@@ -44,22 +46,94 @@ def _telco(code: str, name: str, domains: tuple[str, ...], aliases: tuple[str, .
 ENTITIES: tuple[Entity, ...] = (
     # --- Large private banks -------------------------------------------------
     _bank("HDFCBK", "HDFC Bank", ("hdfcbank.com", "hdfc.com"), ("HDFC",)),
+    _bank("HDFCCR", "HDFC Bank Cards", ("hdfcbank.com", "hdfc.com"), ("HDFC CARD", "HDFC CREDIT CARD")),
     _bank("ICICIB", "ICICI Bank", ("icicibank.com",), ("ICICI",)),
+    _bank("ICICIC", "ICICI Bank Cards", ("icicibank.com",), ("ICICI CARD", "ICICI CREDIT CARD")),
     _bank("AXISBK", "Axis Bank", ("axisbank.com", "axisbank.co.in"), ("AXIS",)),
+    _bank("AXISCR", "Axis Bank Cards", ("axisbank.com",), ("AXIS CARD",)),
     _bank("KOTAKB", "Kotak Mahindra Bank", ("kotak.com",), ("KOTAK",)),
+    _bank("KOTAKC", "Kotak Cards", ("kotak.com",), ("KOTAK CARD",)),
     _bank("IDFCFB", "IDFC FIRST Bank", ("idfcfirstbank.com",), ("IDFC FIRST", "IDFC")),
+    _bank("IDFCCR", "IDFC FIRST Cards", ("idfcfirstbank.com",), ("IDFC CARD",)),
     _bank("INDUSB", "IndusInd Bank", ("indusind.com",), ("INDUSIND",)),
     _bank("YESBNK", "YES Bank", ("yesbank.in",), ("YES BANK",)),
     _bank("FEDBNK", "Federal Bank", ("federalbank.co.in",), ("FEDERAL BANK",)),
     _bank("RBLBNK", "RBL Bank", ("rblbank.com",), ("RBL",)),
+    _bank("RBLCRD", "RBL Cards", ("rblbank.com",), ("RBL CARD",)),
     _bank("BANDHN", "Bandhan Bank", ("bandhanbank.com",), ("BANDHAN",)),
     _bank("CITIBN", "Citibank India", ("citibank.co.in", "citibank.com"), ("CITI",)),
     _bank("SCBANK", "Standard Chartered", ("sc.com",), ("STANDARD CHARTERED", "STANCHART")),
     _bank("HSBCIN", "HSBC India", ("hsbc.co.in", "hsbc.com"), ("HSBC",)),
     _bank("DBSBNK", "DBS Bank India", ("dbs.com",), ("DBS",)),
     _bank("AMEXIN", "American Express", ("americanexpress.com", "amex.in"), ("AMEX",)),
+    # --- More private / foreign banks (they all send their own DLT IDs) ------
+    _bank("IDBIBK", "IDBI Bank", ("idbibank.in",), ("IDBI",)),
+    _bank("IDBICR", "IDBI Cards", ("idbibank.in",), ("IDBI CARD",)),
+    _bank("KARBKY", "Karnataka Bank", ("karnatakabank.com",), ("KARNATAKA BANK",)),
+    _bank("DCBBNK", "DCB Bank", ("dcbbank.com",), ("DCB",)),
+    _bank("SIBANK", "South Indian Bank", ("southindianbank.com",), ("SOUTH INDIAN BANK", "SIB")),
+    _bank("KVBANK", "Karur Vysya Bank", ("kvb.co.in",), ("KARUR VYSYA", "KVB")),
+    _bank("CUBANK", "City Union Bank", ("cityunionbank.com",), ("CITY UNION BANK", "CUB")),
+    _bank("TMNBLK", "Tamilnad Mercantile Bank", ("tmb.in",), ("TAMILNAD MERCANTILE", "TMB")),
+    _bank("JKBNK", "Jammu & Kashmir Bank", ("jkbank.com",), ("J&K BANK", "JK BANK")),
+    _bank("NAINIT", "Nainital Bank", ("nainitalbank.co.in",), ("NAINITAL BANK",)),
+    _bank("SBMBIN", "SBM Bank India", ("sbmbank.co.in",), ("SBM BANK",)),
+    _bank("DOHAIN", "Doha Bank India", ("dohabank.co.in",), ("DOHA BANK",)),
+    _bank("BARODA", "Bank of Baroda Cards", ("bankofbaroda.in",), ("BOB CARD", "BARODA CARD")),
+    _bank("PNBCRD", "PNB Cards", ("pnbindia.in",), ("PNB CARD",)),
+    _bank("UNIONC", "Union Bank Cards", ("unionbankofindia.co.in",), ("UNION CARD",)),
+    _bank("CNRACR", "Canara Bank Cards", ("canarabank.com",), ("CANARA CARD",)),
+    _bank("INDUCR", "IndusInd Cards", ("indusind.com",), ("INDUSIND CARD",)),
+    _bank("FEDCRD", "Federal Bank Cards", ("federalbank.co.in",), ("FEDERAL CARD",)),
+    _bank("YESCRD", "YES Bank Cards", ("yesbank.in",), ("YES CARD",)),
+    _bank("HSBCCR", "HSBC Cards", ("hsbc.co.in",), ("HSBC CARD",)),
+    _bank("SCCARD", "Standard Chartered Cards", ("sc.com",), ("SC CARD", "STANCHART CARD")),
+    _bank("CITICR", "Citibank Cards", ("citibank.co.in",), ("CITI CARD",)),
+    _bank("ICICPR", "ICICI Prime Cards", ("icicibank.com",), ("ICICI PRIME",)),
+    _bank("AMEXCR", "American Express Cards", ("americanexpress.com",), ("AMEX CARD",)),
+    _bank("AUCRED", "AU Bank Cards", ("aubank.in",), ("AU CARD",)),
+    _bank("ONECRD", "OneCard", ("getonecard.app", "fplabs.in"), ("ONE CARD", "ONE CARD CREDIT")),
+    _fin("PAYTMB", "Paytm Payments Bank", ("paytmbank.com",), ("PAYTM BANK", "PPBL")),
+    _fin("AIRTPB", "Airtel Payments Bank", ("airtel.in",), ("AIRTEL PAYMENTS BANK", "APBL")),
+    _fin("JIOPB", "Jio Payments Bank", ("jiopaymentsbank.com",), ("JIO PAYMENTS BANK",)),
+    _fin("FINOIN", "Fino Payments Bank", ("finobank.com",), ("FINO",)),
+    _bank("UTKRSH", "Utkarsh Small Finance Bank", ("utkarsh.bank",), ("UTKARSH",)),
+    _bank("ESAFSF", "ESAF Small Finance Bank", ("esafbank.com",), ("ESAF",)),
+    _bank("CAPSFB", "Capital Small Finance Bank", ("capitalbank.co.in",), ("CAPITAL SFB",)),
+    _bank("SURYOD", "Suryoday Small Finance Bank", ("suryodaybank.com",), ("SURYODAY",)),
+    _bank("FINCRE", "Fincare Small Finance Bank", ("fincarebank.com",), ("FINCARE",)),
     # --- PSU banks -----------------------------------------------------------
     _bank("SBIN", "State Bank of India", ("onlinesbi.sbi", "sbi.co.in", "onlinesbi.com"), ("SBI",)),
+    _bank("SBICRD", "SBI Card", ("sbicard.com", "onlinesbi.sbi"), ("SBI CARD", "SBI CREDIT CARD")),
+    # --- Insurers and NBFCs (they send premium/EMI mail from their own DLT IDs)
+    _brand("LICIND", "LIC", ("licindia.in",), ("LIC", "LIFE INSURANCE CORPORATION")),
+    _brand("LICOFI", "LIC", ("licindia.in",), ("LIC OF INDIA",)),
+    _brand("HDFCLF", "HDFC Life", ("hdfclife.com",), ("HDFC LIFE",)),
+    _brand("ICICIP", "ICICI Prudential", ("iciciprulife.com",), ("ICICI PRUDENTIAL", "ICICI PRU")),
+    _brand("SBILIF", "SBI Life", ("sbilife.co.in",), ("SBI LIFE",)),
+    _brand("MAXLIF", "Max Life", ("maxlifeinsurance.com",), ("MAX LIFE",)),
+    _brand("TATAAIA", "Tata AIA", ("tataaia.com",), ("TATA AIA",)),
+    _brand("STARHL", "Star Health", ("starhealth.in",), ("STAR HEALTH",)),
+    _brand("NIVABU", "Niva Bupa", ("nivabupa.com",), ("NIVA BUPA",)),
+    _brand("GODIGIT", "Go Digit", ("godigit.com",), ("GO DIGIT", "DIGIT")),
+    _brand("BAJAJF", "Bajaj Finance", ("bajajfinserv.in",), ("BAJAJ FINANCE", "BAJAJ FINSERV")),
+    _brand("TATCAP", "Tata Capital", ("tatacapital.com",), ("TATA CAPITAL",)),
+    _brand("MUTHOT", "Muthoot Finance", ("muthootfinance.com",), ("MUTHOOT",)),
+    _brand("GROWW", "Groww", ("groww.in",), ("GROWW", "NEXTBILLION")),
+    _brand("ZERODH", "Zerodha", ("zerodha.com",), ("ZERODHA",)),
+    _brand("CDSLIN", "CDSL", ("cdslindia.com",), ("CDSL",)),
+    _brand("NSDLIN", "NSDL", ("nsdl.co.in",), ("NSDL",)),
+    _brand("IRCTCS", "IRCTC", ("irctc.co.in",), ("IRCTC",)),
+    _brand("VAHAN", "Parivahan", ("parivahan.gov.in", "vahan.parivahan.gov.in"), ("PARIVAHAN", "VAHAN", "RTO")),
+    _brand("NETFLX", "Netflix", ("netflix.com",), ("NETFLIX",)),
+    _brand("SPOTFY", "Spotify", ("spotify.com",), ("SPOTIFY",)),
+    _brand("AMAZON", "Amazon", ("amazon.in", "amazon.com"), ("AMAZON", "AMZN")),
+    _brand("FLIPKT", "Flipkart", ("flipkart.com",), ("FLIPKART",)),
+    _brand("MYNTRA", "Myntra", ("myntra.com",), ("MYNTRA",)),
+    _brand("ZOMATO", "Zomato", ("zomato.com",), ("ZOMATO", "ETERNAL")),
+    _brand("SWIGGY", "Swiggy", ("swiggy.in", "swiggy.com"), ("SWIGGY", "BUNDL")),
+    _brand("JIO", "Jio", ("jio.com",), ("JIO", "RELIANCE JIO")),
+    _brand("AIRTEL", "Airtel", ("airtel.in",), ("AIRTEL", "BHARTI")),
     _bank("PNBBNK", "Punjab National Bank", ("pnbindia.in",), ("PNB",)),
     _bank("BOIIND", "Bank of India", ("bankofindia.co.in",), ("BANK OF INDIA",)),
     _bank("CNRABK", "Canara Bank", ("canarabank.com",), ("CANARA",)),
@@ -94,6 +168,62 @@ ENTITIES: tuple[Entity, ...] = (
     _fin("AMAZNP", "Amazon Pay", ("amazon.in", "amazonpay.in"), ("AMAZON PAY",)),
     _fin("MOBIKW", "MobiKwik", ("mobikwik.com",), ("MOBIKWIK",)),
     _fin("FREECH", "Freecharge", ("freecharge.in",), ("FREECHARGE",)),
+    # --- Brokers, depositories, AMCs ----------------------------------------
+    _fin("ZERODH", "Zerodha", ("zerodha.com",), ("ZERODHA", "ZERODHA BROKING")),
+    _fin("GROWW", "Groww", ("groww.in",), ("GROWW", "NEXTBILLION")),
+    _fin("UPSTOX", "Upstox", ("upstox.com",), ("UPSTOX", "RKSV")),
+    _fin("ANGEL1", "Angel One", ("angelone.in",), ("ANGEL ONE", "ANGEL BROKING")),
+    _fin("FIVEPS", "5paisa", ("5paisa.com",), ("5PAISA", "IIFL SECURITIES")),
+    _fin("MOTILA", "Motilal Oswal", ("motilaloswal.com",), ("MOTILAL OSWAL", "MOSL")),
+    _fin("SHAREK", "Sharekhan", ("sharekhan.com",), ("SHAREKHAN",)),
+    _fin("DHANIN", "Dhan", ("dhan.co",), ("DHAN", "MONEYLICIOUS")),
+    _fin("FYERS", "Fyers", ("fyers.in",), ("FYERS",)),
+    _fin("PAYTMN", "Paytm Money", ("paytmmoney.com",), ("PAYTM MONEY",)),
+    _fin("INDMNY", "INDmoney", ("indmoney.com",), ("INDMONEY", "IND MONEY")),
+    _fin("KUVERA", "Kuvera", ("kuvera.in",), ("KUVERA",)),
+    _fin("COININ", "Zerodha Coin", ("coin.zerodha.com",), ("ZERODHA COIN", "COIN")),
+    _fin("GROWWM", "Groww MF", ("groww.in",), ("GROWW MUTUAL FUND",)),
+    _fin("SMALLC", "smallcase", ("smallcase.com",), ("SMALLCASE",)),
+    _fin("GEOJIT", "Geojit", ("geojit.com",), ("GEOJIT",)),
+    _fin("RELIGA", "Religare Broking", ("religareonline.com",), ("RELIGARE",)),
+    _fin("AXISDL", "Axis Direct", ("axisdirect.in",), ("AXIS DIRECT", "AXIS SECURITIES")),
+    _fin("SBICAP", "SBI Securities", ("sbisecurities.in",), ("SBI SECURITIES", "SBICAP SEC")),
+    _fin("IIFLSC", "IIFL Securities", ("iifl.com",), ("IIFL SECURITIES",)),
+    _fin("HDFCSL", "HDFC Securities", ("hdfcsec.com",), ("HDFC SEC", "HDFC SECURITIES")),
+    _fin("ICICID", "ICICI Direct", ("icicidirect.com",), ("ICICI DIRECT",)),
+    _fin("KOTAKS", "Kotak Securities", ("kotaksecurities.com",), ("KOTAK SECURITIES", "KOTAK NEO")),
+    _brand("CDSLIN", "CDSL", ("cdslindia.com",), ("CDSL", "CENTRAL DEPOSITORY")),
+    _brand("NSDLIN", "NSDL", ("nsdl.co.in",), ("NSDL",)),
+    _brand("NSEIND", "NSE", ("nseindia.com",), ("NSE", "NATIONAL STOCK EXCHANGE")),
+    _brand("BSEIND", "BSE", ("bseindia.com",), ("BSE", "BOMBAY STOCK EXCHANGE")),
+    _brand("CAMSN", "CAMS", ("camsonline.com",), ("CAMS", "COMPUTER AGE MANAGEMENT")),
+    _brand("KFINT", "KFintech", ("kfintech.com",), ("KFINTECH", "KARVY")),
+    _brand("MFUTIL", "MF Utilities", ("mfuindia.com",), ("MF UTILITIES", "MFU")),
+    _brand("SBIMF", "SBI Mutual Fund", ("sbimf.com",), ("SBI MUTUAL FUND", "SBI MF")),
+    _brand("HDFCMF", "HDFC Mutual Fund", ("hdfcfund.com",), ("HDFC MUTUAL FUND", "HDFC MF")),
+    _brand("ICICMF", "ICICI Prudential MF", ("icicipruamc.com",), ("ICICI PRUDENTIAL MUTUAL FUND",)),
+    _brand("NIPPMF", "Nippon India MF", ("nipponindiamf.com",), ("NIPPON INDIA", "RELIANCE MUTUAL FUND")),
+    _brand("AXISMF", "Axis Mutual Fund", ("axismf.com",), ("AXIS MUTUAL FUND", "AXIS MF")),
+    _brand("KOTAKR", "Kotak Mahindra AMC", ("kotakmf.com",), ("KOTAK MUTUAL FUND",)),
+    _brand("PPFAS", "PPFAS Mutual Fund", ("ppfas.com",), ("PARAG PARIKH", "PPFAS")),
+    _brand("UTIMF", "UTI Mutual Fund", ("utimf.com",), ("UTI MUTUAL FUND", "UTI MF")),
+    _brand("FRANKL", "Franklin Templeton", ("franklintempletonindia.com",), ("FRANKLIN TEMPLETON",)),
+    _brand("EDELWE", "Edelweiss MF", ("edelweissmf.com",), ("EDELWEISS MUTUAL FUND",)),
+    # --- Telecom, broadband, DTH --------------------------------------------
+    _telco("VODAFN", "Vi (Vodafone Idea)", ("myvi.in", "vodafoneidea.com"), ("VODAFONE IDEA", "IDEA CELLULAR")),
+    _telco("BSNL", "BSNL", ("bsnl.co.in",), ("BSNL", "BHARAT SANCHAR")),
+    _telco("AIRTEL", "Airtel", ("airtel.in",), ("AIRTEL", "BHARTI AIRTEL")),
+    _telco("JIO", "Jio", ("jio.com",), ("JIO", "RELIANCE JIO")),
+    _brand("ACTFB", "ACT Fibernet", ("actcorp.in", "actfibernet.in"), ("ACT FIBERNET", "ACT BROADBAND")),
+    _brand("HATHWY", "Hathway", ("hathway.com",), ("HATHWAY",)),
+    _brand("EXCITL", "Excitel", ("excitel.com",), ("EXCITEL",)),
+    _brand("JIOFBR", "JioFiber", ("jio.com",), ("JIOFIBER", "JIO FIBER")),
+    _brand("XSTRM", "Airtel Xstream", ("airtel.in",), ("XSTREAM", "AIRTEL XSTREAM FIBER")),
+    _brand("TATAPL", "Tata Play", ("tataplay.com",), ("TATA PLAY", "TATA SKY")),
+    _brand("DISHTV", "Dish TV", ("dishtv.in",), ("DISH TV", "DISHTV")),
+    _brand("D2HIN", "d2h", ("d2h.com",), ("D2H", "VIDEOCON D2H")),
+    _brand("SUNTV", "Sun Direct", ("sundirect.in",), ("SUN DIRECT",)),
+    _brand("AMAZONF", "Amazon Fiber", ("amazon.in",), ("AMAZON FIBER",)),
     # --- Government / utilities ---------------------------------------------
     _govt("VAHAN", "Parivahan / Vahan", ("parivahan.gov.in", "vahan.parivahan.gov.in"), ("PARIVAHAN", "VAHAN", "RTO")),
     _govt("ECHALN", "Parivahan e-Challan", ("echallan.parivahan.gov.in", "parivahan.gov.in"), ("E-CHALLAN", "ECHALLAN")),
@@ -111,6 +241,29 @@ ENTITIES: tuple[Entity, ...] = (
     _govt("INDANE", "Indane Gas (IOCL)", ("indane.co.in", "iocl.com"), ("INDANE",)),
     _govt("HPGAS", "HP Gas (HPCL)", ("hindustanpetroleum.com", "myhpng.in"), ("HP GAS",)),
     _govt("BHARAT", "Bharat Gas (BPCL)", ("ebharatgas.com",), ("BHARAT GAS",)),
+    # --- Travel: rail, bus, air, hotels -------------------------------------
+    _brand("IRCTCS", "IRCTC", ("irctc.co.in",), ("IRCTC", "INDIAN RAILWAY CATERING")),
+    _brand("REDBUS", "RedBus", ("redbus.in",), ("REDBUS", "IBIBO")),
+    _brand("ABHIBU", "AbhiBus", ("abhibus.com",), ("ABHIBUS", "ABHI BUS")),
+    _brand("PAYTMTR", "Paytm Travel", ("paytm.com",), ("PAYTM TRAVEL",)),
+    _brand("IXIGOT", "ixigo", ("ixigo.com",), ("IXIGO",)),
+    _brand("INDIGO", "IndiGo", ("goindigo.in",), ("INDIGO", "INTERGLOBE")),
+    _brand("AIRIND", "Air India", ("airindia.com",), ("AIR INDIA", "AIRINDIA")),
+    _brand("VISTAR", "Vistara", ("airvistara.com",), ("VISTARA",)),
+    _brand("SPICEJ", "SpiceJet", ("spicejet.com",), ("SPICEJET", "SPICE JET")),
+    _brand("AKASA", "Akasa Air", ("akasaair.com",), ("AKASA", "AKASA AIR")),
+    _brand("GOFIRST", "Go First", ("flygofirst.com",), ("GO FIRST", "GOAIR")),
+    _brand("AAHANA", "AirAsia India", ("airasia.com",), ("AIRASIA", "AIR ASIA INDIA")),
+    _brand("MMYTRI", "MakeMyTrip", ("makemytrip.com",), ("MAKEMYTRIP", "MMT")),
+    _brand("GOIBBO", "Goibibo", ("goibibo.com",), ("GOIBIBO",)),
+    _brand("CLEART", "Cleartrip", ("cleartrip.com",), ("CLEARTRIP",)),
+    _brand("YATRA", "Yatra", ("yatra.com",), ("YATRA",)),
+    _brand("OYOIN", "OYO", ("oyorooms.com",), ("OYO", "ORAVEL")),
+    _brand("TREEBO", "Treebo", ("treebo.com",), ("TREEBO",)),
+    _brand("FABHOT", "FabHotels", ("fabhotels.com",), ("FABHOTELS",)),
+    _brand("AIRBNB", "Airbnb", ("airbnb.com", "airbnb.co.in"), ("AIRBNB",)),
+    _brand("DMRC", "Delhi Metro", ("delhimetrorail.com",), ("DMRC", "DELHI METRO")),
+    _brand("BMRCL", "Namma Metro", ("bmrcl.co.in",), ("BMRCL", "NAMMA METRO")),
     # --- E-commerce / transport / health brands ------------------------------
     _brand("AMAZON", "Amazon", ("amazon.in", "amazon.com"), ("AMAZON",)),
     _brand("FLPKRT", "Flipkart", ("flipkart.com",), ("FLIPKART",)),
@@ -166,18 +319,112 @@ ENTITIES: tuple[Entity, ...] = (
     _telco("BSNL", "BSNL", ("bsnl.co.in",), ("BSNL",)),
 )
 
-ENTITIES_BY_CODE: dict[str, Entity] = {e.code: e for e in ENTITIES}
+def _dedupe(entities: tuple[Entity, ...]) -> tuple[Entity, ...]:
+    """One entity per DLT code, with the aliases of every declaration merged.
+
+    The same real-world institution is legitimately declared twice: ZERODHA as a
+    brand and again as a broker, JIO under utilities and again as a carrier. The
+    later block carries the more specific kind and domains, so it wins; the
+    aliases are unioned in file order so no spelling stops resolving. Without
+    this, ``ENTITIES_BY_CODE`` silently kept the last declaration while
+    ``ALIAS_INDEX`` kept the first, and the two could disagree about ``kind``.
+    """
+    order: list[str] = []
+    merged: dict[str, Entity] = {}
+    for entity in entities:
+        if entity.code not in merged:
+            order.append(entity.code)
+            merged[entity.code] = entity
+            continue
+        previous = merged[entity.code]
+        aliases = list(previous.aliases)
+        for alias in entity.aliases:
+            if alias not in aliases:
+                aliases.append(alias)
+        domains = list(dict.fromkeys((*previous.domains, *entity.domains)))
+        merged[entity.code] = Entity(
+            code=entity.code,
+            name=entity.name,
+            kind=entity.kind,
+            domains=tuple(domains),
+            aliases=tuple(aliases),
+        )
+    return tuple(merged[code] for code in order)
+
+
+#: Deduplicated, file order preserved. Every count below is a count of these.
+UNIQUE_ENTITIES: tuple[Entity, ...] = _dedupe(ENTITIES)
+
+ENTITIES_BY_CODE: dict[str, Entity] = {e.code: e for e in UNIQUE_ENTITIES}
 
 ALIAS_INDEX: dict[str, Entity] = {}
-for _e in ENTITIES:
+for _e in UNIQUE_ENTITIES:
     ALIAS_INDEX[_e.name.upper()] = _e
     for _a in _e.aliases:
         ALIAS_INDEX.setdefault(_a.strip().upper(), _e)
 
 DOMAIN_INDEX: dict[str, Entity] = {}
-for _e in ENTITIES:
+for _e in UNIQUE_ENTITIES:
     for _d in _e.domains:
         DOMAIN_INDEX[_d] = _e
+
+#: Banks whose DLT codes include a separate card entity, or whose legal name has
+#: a short form users actually type. Without this, "71 bank codes" reads as 71
+#: banks, which is wrong: HDFCBK and HDFCCR are the same institution.
+_CARD_SUFFIX = re.compile(r"\s+cards?$", re.IGNORECASE)
+_BANK_SYNONYMS: dict[str, str] = {
+    "AU Bank": "AU Small Finance Bank",
+    "Citibank": "Citibank India",
+    "HSBC": "HSBC India",
+    "ICICI Prime": "ICICI Bank",
+    "IDBI": "IDBI Bank",
+    "IDFC FIRST": "IDFC FIRST Bank",
+    "IndusInd": "IndusInd Bank",
+    "Kotak": "Kotak Mahindra Bank",
+    "PNB": "Punjab National Bank",
+    "RBL": "RBL Bank",
+    "SBI": "State Bank of India",
+    "Union Bank": "Union Bank of India",
+}
+
+
+def canonical_bank(name: str) -> str:
+    """The institution behind a DLT code, with card variants folded in."""
+    trimmed = _CARD_SUFFIX.sub("", name).strip()
+    return _BANK_SYNONYMS.get(trimmed, trimmed)
+
+
+def bank_codes() -> list[str]:
+    return sorted(e.code for e in UNIQUE_ENTITIES if e.kind is EntityKind.BANK)
+
+
+def bank_institutions() -> dict[str, list[str]]:
+    """``{institution: [DLT codes]}`` — the only honest answer to "how many banks"."""
+    out: dict[str, list[str]] = {}
+    for entity in UNIQUE_ENTITIES:
+        if entity.kind is not EntityKind.BANK:
+            continue
+        out.setdefault(canonical_bank(entity.name), []).append(entity.code)
+    return {name: sorted(codes) for name, codes in sorted(out.items())}
+
+
+def coverage() -> dict[str, object]:
+    """Countable coverage. Every number here is derived from this module."""
+    kinds: dict[str, int] = {}
+    for entity in UNIQUE_ENTITIES:
+        kinds[entity.kind.value] = kinds.get(entity.kind.value, 0) + 1
+    return {
+        "declarations": len(ENTITIES),
+        "unique_codes": len(UNIQUE_ENTITIES),
+        "duplicate_codes_merged": len(ENTITIES) - len(UNIQUE_ENTITIES),
+        "by_kind": kinds,
+        "bank_codes": len(bank_codes()),
+        "bank_institutions": len(bank_institutions()),
+        "aliases": len(ALIAS_INDEX),
+        "domains": len(DOMAIN_INDEX),
+        "routing_intents": len(ROUTING),
+    }
+
 
 #: Link shorteners commonly abused in Indian SMS phishing.
 SHORTENERS: frozenset[str] = frozenset(
@@ -253,6 +500,11 @@ ROUTING: dict[Intent, Route] = {
     Intent.OTP: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_REMINDERS, Retention.EXPIRE_24H, True, "expires in minutes; Apple has no OTP sub-action"),
     Intent.VOUCHER_ISSUED: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_REWARDS, Retention.KEEP_FOREVER, False, "has monetary value; the app tracks expiry"),
     Intent.LOGISTICS: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_ORDERS, Retention.DELETE_AFTER_EVENT, True, "dead once delivered"),
+    Intent.TRAVEL: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_ORDERS, Retention.DELETE_AFTER_EVENT, True, "itinerary is dead after the journey"),
+    Intent.TRADE: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_ORDERS, Retention.KEEP_FOREVER, False, "capital-gains and portfolio record"),
+    Intent.DIVIDEND: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_FINANCE, Retention.KEEP_FOREVER, False, "taxable income record"),
+    Intent.IPO: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_ORDERS, Retention.KEEP_FOREVER, False, "allotment/refund audit trail"),
+    Intent.CORPORATE_ACTION: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_ORDERS, Retention.KEEP_FOREVER, False, "cost-basis adjustment record"),
     Intent.GOVT_NOTICE: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_PUBLIC_SERVICES, Retention.KEEP_FOREVER, False, "legal record"),
     Intent.HEALTH: Route(AppleAction.TRANSACTION, AppleSubAction.TRANSACTIONAL_HEALTH, Retention.KEEP_FOREVER, False, "medical record"),
     Intent.BANK_UPSELL: Route(AppleAction.PROMOTION, AppleSubAction.PROMOTIONAL_OFFERS, Retention.EXPIRE_30D, True, "marketing from a bank is still marketing"),
@@ -350,8 +602,12 @@ SEED_MERCHANTS: tuple[tuple[str, str, str], ...] = (
     ("INDANE", "Indane Gas", "Utilities & Bills"),
     ("BESCOM", "BESCOM", "Utilities & Bills"),
     ("MSEDCL", "MSEDCL", "Utilities & Bills"),
-    ("JIO", "Jio", "Utilities & Bills"),
-    ("AIRTEL", "Airtel", "Utilities & Bills"),
+    # Carriers, not utilities: they became their own category when broadband,
+    # DTH and prepaid top-ups arrived, and the legacy seed must not win over it.
+    ("JIO", "Jio", "Mobile & Broadband"),
+    ("AIRTEL", "Airtel", "Mobile & Broadband"),
+    ("BSNL", "BSNL", "Mobile & Broadband"),
+    ("VODAFONE IDEA", "Vi", "Mobile & Broadband"),
     ("PARIVAHAN", "Parivahan e-Challan", "Taxes & Fines"),
     ("ECHALLAN", "Parivahan e-Challan", "Taxes & Fines"),
 )

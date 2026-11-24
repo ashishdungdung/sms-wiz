@@ -44,9 +44,12 @@ class TestIngest:
 
     def test_summary(self, client):
         post_sms(client)
-        summary = client.get("/api/v1/summary", params={"month": "2025-03"}).json()
+        # The message says "on 25-02-25" and was delivered on 1 March. Money
+        # buckets by the bank's date, so this is February's spending.
+        summary = client.get("/api/v1/summary", params={"month": "2025-02"}).json()
         assert summary["spend_total"] == 1450.0
         assert summary["by_category"]["Groceries & Quick Commerce"] == 1450.0
+        assert client.get("/api/v1/summary", params={"month": "2025-03"}).json()["spend_total"] == 0.0
 
     def test_summary_validates_month(self, client):
         assert client.get("/api/v1/summary", params={"month": "March"}).status_code == 422
@@ -106,8 +109,18 @@ class TestFilterEndpoint:
         ).json()
         assert scam["action"] == "junk"
 
-    def test_missing_body_is_rejected(self, client):
-        assert client.post("/api/v1/filter", json={"sender": "123"}).status_code == 400
+    def test_missing_body_fails_open(self, client):
+        """The extension must always get an actionable answer.
+
+        A 4xx tells iOS "this filter is broken", which is how a message ends up
+        unfiltered *and* unreported. `allow` changes nothing about the inbox, so
+        it is the only safe answer when there is nothing to read.
+        """
+        response = client.post("/api/v1/filter", json={"sender": "123"})
+        assert response.status_code == 200
+        assert response.json()["action"] == "allow"
+        assert response.json()["subAction"] == "none"
+        assert "reason" in response.json()
 
     def test_capabilities_are_within_apple_limits(self, client):
         caps = client.get("/api/v1/apple/capabilities").json()
@@ -165,3 +178,54 @@ class TestLanguageSurface:
         rows = client.get("/api/v1/events").json()
         assert rows[0]["scripts"] == []
         assert rows[0]["multilingual"] is False
+
+
+class TestDomainViews:
+    """The demat / travel / bills endpoints. None of them touch the spend ring."""
+
+    def test_investments_endpoint_reports_units_and_a_caveat(self, client):
+        post_sms(
+            client,
+            sender="AD-ZERODH-S",
+            body="Your order for 10 shares of INFY executed at Rs 1450.00 on NSE. Order ID 250301001234.",
+        )
+        body = client.get("/api/v1/analytics/investments").json()
+        assert body["holdings"][0]["symbol"] == "INFY"
+        assert body["holdings"][0]["net_quantity"] == pytest.approx(10.0)
+        assert "holding statement" in body["caveat"]
+        # The trade is not spending, so the month total stays empty.
+        assert client.get("/api/v1/summary?month=2025-03").json()["spend_total"] == pytest.approx(0.0)
+
+    def test_travel_endpoint_lists_the_trip(self, client):
+        post_sms(
+            client,
+            sender="AD-REDBUS-S",
+            body="Bus ticket booked. PNR 88123, Bengaluru to Chennai, 2 passengers, Rs 1,400",
+        )
+        body = client.get("/api/v1/analytics/travel").json()
+        assert body["count"] == 1
+        assert body["trips"][0]["mode"] == "bus"
+        assert body["by_mode"] == {"bus": 1}
+
+    def test_bills_endpoint_separates_due_from_paid(self, client):
+        post_sms(
+            client,
+            sender="AD-AIRTEL-S",
+            body="Your postpaid bill of Rs 799.00 is due on 10-03-2025. Pay now to avoid disconnection.",
+        )
+        post_sms(
+            client,
+            sender="AD-HDFCBK-T",
+            body="Rs.349.00 debited from A/c XX4092 to VPA JIO@ybl on 01-03-25. Avl Bal Rs.5,000.00",
+        )
+        body = client.get("/api/v1/analytics/bills").json()
+        assert body["due_total"] == pytest.approx(799.0)
+        assert body["paid_total"] == pytest.approx(349.0)
+        assert body["paid"][0]["category"] == "Mobile & Broadband"
+
+    def test_overview_carries_every_domain_view(self, client):
+        # No date inside the message, so it lands on received_at (2025-03-01).
+        post_sms(client, body="Rs.500.00 debited from A/c XX4092 to VPA SWIGGY@icici")
+        body = client.get("/api/v1/overview?month=2025-03").json()
+        assert {"investments", "travel", "bills"} <= set(body)
+        assert body["month"]["spend"] == pytest.approx(500.0)

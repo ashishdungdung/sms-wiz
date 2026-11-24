@@ -47,6 +47,11 @@
     "otp",
     "voucher_issued",
     "logistics",
+    "travel",
+    "trade",
+    "dividend",
+    "ipo",
+    "corporate_action",
     "govt_notice",
     "health",
     "bank_upsell",
@@ -62,6 +67,7 @@
     "instrument_load",
     "cash_withdrawal",
     "investment",
+    "foreign_currency",
     "none"
   ],
   "retentions": [

@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from .models import EntityKind, SenderInfo
 from .normalize import normalize_text
-from .registry import ENTITIES_BY_CODE, SHORTENERS, SUSPICIOUS_TLDS
+from .registry import ALIAS_INDEX, ENTITIES_BY_CODE, SHORTENERS, SUSPICIOUS_TLDS
 
 # --------------------------------------------------------------------------
 # Text normalisation
@@ -82,7 +82,16 @@ def parse_sender(raw: str) -> SenderInfo:
     info.dlt_suffix = suffix
 
     entity = ENTITIES_BY_CODE.get(code)
+    if entity is None:
+        # The DLT code is not the one we registered for this institution but it
+        # is the brand's own name (AD-CDSL-S ships alongside AD-CDSLIN-S). Try
+        # the alias table before calling the sender unknown: without this, demat
+        # phishing from a "CDSL" header scored 0.28 and was never even flagged.
+        entity = ALIAS_INDEX.get(code)
+        if entity is not None:
+            info.notes.append(f"DLT code {code} matched the {entity.name} alias table")
     if entity:
+        info.entity_code = entity.code
         info.entity_kind = entity.kind
         info.display_name = entity.name
         info.is_known_brand = True
@@ -106,27 +115,32 @@ def parse_sender(raw: str) -> SenderInfo:
 # --------------------------------------------------------------------------
 
 _AMT = r"((?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?)"
-_PREFIX_RE = re.compile(r"(?:\brs\.?|\binr|\b₹)\s*" + _AMT, re.IGNORECASE)
+#: Indian shorthand: "Rs 2.5 lakh", "Rs 50K", "1.5 crore". Deliberately does not
+#: accept a bare "cr" — in bank SMS that means *credit* ("Rs 500 CR"), and reading
+#: it as ₹5 crore would be the most expensive bug in the file.
+_MULT = r"(?:\s*(?P<mult>lakhs?|lacs?|crores?|k))?\b"
+_MULTIPLIERS = {"lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5, "crore": 1e7, "crores": 1e7, "k": 1e3}
+_PREFIX_RE = re.compile(r"(?:\brs\.?|\binr|\b₹)\s*" + _AMT + _MULT, re.IGNORECASE)
 _SUFFIX_RE = re.compile(_AMT + r"\s*(?:rs\.?|inr|₹|/-)", re.IGNORECASE)
 _FX_RE = re.compile(r"(?:\busd|\$)\s*" + _AMT, re.IGNORECASE)
 
 _BALANCE_RE = re.compile(
     r"\b(?:avl\.?\s*bal(?:ance)?|available\s+bal(?:ance)?|closing\s+bal(?:ance)?|bal(?:ance)?)\b"
-    r"\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT,
+    r"\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT + _MULT,
     re.IGNORECASE,
 )
 _CREDIT_LIMIT_RE = re.compile(
     r"\b(?:avl\.?\s+(?:cr(?:edit)?\s+)?limit|available\s+credit\s+limit|credit\s+limit)\b"
-    r"\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT,
+    r"\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT + _MULT,
     re.IGNORECASE,
 )
 _MIN_DUE_RE = re.compile(
-    r"\b(?:min(?:imum)?\.?\s+(?:amt|amount|due))\b\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT,
+    r"\b(?:min(?:imum)?\.?\s+(?:amt|amount|due))\b\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT + _MULT,
     re.IGNORECASE,
 )
 _TOTAL_DUE_RE = re.compile(
     r"\b(?:total\s+(?:amt\.?|amount)?\s*(?:due|payable)|total\s+due)\b"
-    r"\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT,
+    r"\s*(?:is|:)?\s*(?:rs\.?|inr|₹)?\s*" + _AMT + _MULT,
     re.IGNORECASE,
 )
 
@@ -155,25 +169,32 @@ def _to_float(raw: str) -> float:
     return float(raw.replace(",", ""))
 
 
+def _scale(value: float, multiplier: Optional[str]) -> float:
+    """Apply lakh / crore / K to a bare figure."""
+    if not multiplier:
+        return value
+    return value * _MULTIPLIERS[multiplier.lower()]
+
+
+def _match_value(match: Optional[re.Match]) -> Optional[float]:
+    if match is None:
+        return None
+    return _scale(_to_float(match.group(1)), match.groupdict().get("mult"))
+
+
 def find_balance(text: str) -> Optional[tuple[float, tuple[int, int]]]:
     match = _BALANCE_RE.search(text)
     if not match:
         return None
-    return _to_float(match.group(1)), match.span()
+    return _match_value(match), match.span()  # type: ignore[return-value]
 
 
 def find_credit_limit(text: str) -> Optional[float]:
-    match = _CREDIT_LIMIT_RE.search(text)
-    return _to_float(match.group(1)) if match else None
+    return _match_value(_CREDIT_LIMIT_RE.search(text))
 
 
 def find_due_amounts(text: str) -> tuple[Optional[float], Optional[float]]:
-    total = _TOTAL_DUE_RE.search(text)
-    minimum = _MIN_DUE_RE.search(text)
-    return (
-        _to_float(total.group(1)) if total else None,
-        _to_float(minimum.group(1)) if minimum else None,
-    )
+    return _match_value(_TOTAL_DUE_RE.search(text)), _match_value(_MIN_DUE_RE.search(text))
 
 
 def _direction(text: str, start: int, end: int) -> str:
@@ -204,9 +225,10 @@ def find_amounts(text: str, skip_spans: tuple[tuple[int, int], ...] = ()) -> lis
             if (start, end) in seen or _blocked(start, end):
                 continue
             seen.add((start, end))
+            groups = match.groupdict()
             hits.append(
                 AmountHit(
-                    value=_to_float(match.group(1)),
+                    value=_scale(_to_float(match.group(1)), groups.get("mult")),
                     currency=currency,
                     raw=match.group(0).strip(),
                     start=start,
@@ -233,7 +255,21 @@ _LAST4_PATTERNS = (
 )
 
 
+#: A full card or account number written out: the tail is what identifies it.
+#: Checked first, because "card 4111 1111 1111 1111" otherwise reports 4111 —
+#: the first four digits of someone else's card, which is both wrong and a
+#: privacy mistake.
+_LONG_NUMBER_RE = re.compile(
+    r"\b(?:card|a/?c|acct|account)\b[^\d\n]{0,12}?((?:\d[ -]?){12,18}\d)\b", re.IGNORECASE
+)
+
+
 def find_last4(text: str) -> Optional[str]:
+    long_match = _LONG_NUMBER_RE.search(text)
+    if long_match:
+        digits = re.sub(r"\D", "", long_match.group(1))
+        if len(digits) >= 13:
+            return digits[-4:]
     for pattern in _LAST4_PATTERNS:
         match = pattern.search(text)
         if match:
@@ -311,6 +347,32 @@ def _resolve_year(year: Optional[int], now: datetime, month: int, day: int) -> i
     if candidate.date() < (now - timedelta(days=30)).date():
         candidate = datetime(now.year + 1, month, day)
     return candidate.year
+
+
+_DATE_WORD_RE = re.compile(
+    r"\b(?:on|dt|dated|date|txn\s+date|transacted\s+on|value\s+date)\b", re.IGNORECASE
+)
+
+
+def unparsed_dates(text: str, now: datetime) -> list[str]:
+    """Date-shaped tokens the calendar rejected, e.g. ``31-02-26``.
+
+    A bank SMS sometimes carries a date that does not exist (a typo in the
+    template, or a wrong day for the month). Falling back to "received now" is
+    right, but silently moving the spend into another month is not; the caller
+    flags it. Only tokens that follow a date word count, because ``12-34-5678``
+    in a reference number is not a date the sender meant.
+    """
+    good = [(h.start, h.end) for h in find_dates(text, now)]
+    out: list[str] = []
+    for match in _NUMERIC_DATE_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in good):
+            continue
+        prefix = text[max(0, match.start() - 18) : match.start()]
+        if not _DATE_WORD_RE.search(prefix):
+            continue
+        out.append(match.group(0))
+    return out
 
 
 def find_dates(text: str, now: datetime) -> list[DateHit]:
@@ -485,7 +547,12 @@ def is_suspicious_tld(domain: str) -> bool:
 # Travel / logistics
 # --------------------------------------------------------------------------
 
-_PNR_RE = re.compile(r"\bpnr\b[^A-Za-z0-9]{0,6}([A-Z0-9]{6}|[0-9]{10})\b", re.IGNORECASE)
+#: Indian train PNRs are always 10 digits; bus and hotel references are shorter
+#: (RedBus uses 6-8). The lookahead requires at least one digit so "PNR NUMBER"
+#: never becomes a reference.
+_PNR_RE = re.compile(
+    r"\bpnr\b[^A-Za-z0-9]{0,6}(?=[A-Z0-9]*\d)([A-Z0-9]{5,12})\b", re.IGNORECASE
+)
 _AWB_RE = re.compile(
     r"\b(?:awb|tracking|consignment|docket)\b\s*(?:id|no\.?|number)?\s*[:#]?\s*([A-Za-z0-9]{8,16})\b",
     re.IGNORECASE,
@@ -502,9 +569,54 @@ _HANDOVER_RE = re.compile(
 )
 
 
+_ISIN_RE = re.compile(r"\bISIN\s*:?\s*(IN[A-Z0-9]{10})\b", re.IGNORECASE)
+_QUANTITY_RE = re.compile(
+    r"\b(?P<qty>[\d,]+(?:\.\d+)?)\s*(?:qty|quantity|shares?|units?)\b", re.IGNORECASE
+)
+_SYMBOL_RE = re.compile(
+    r"(?:of|for|in)\s+(?P<symbol>[A-Z][A-Z0-9&\-]{2,19})\b(?!\s*(?:bank|limited|ltd|inc))"
+)
+
+
+def find_isin(text: str) -> Optional[str]:
+    """ISIN is the only unambiguous security identifier in an Indian SMS."""
+    match = _ISIN_RE.search(text)
+    return match.group(1).upper() if match else None
+
+
+def find_quantity(text: str) -> Optional[float]:
+    match = _QUANTITY_RE.search(text)
+    if not match:
+        return None
+    try:
+        return float(match.group("qty").replace(",", ""))
+    except ValueError:  # pragma: no cover - defensive
+        return None
+
+
+def find_symbol(text: str) -> Optional[str]:
+    """A ticker only when it is shouty and right after of/for/in."""
+    match = _SYMBOL_RE.search(text)
+    return match.group("symbol") if match else None
+
+
 def find_pnr(text: str) -> Optional[str]:
     match = _PNR_RE.search(text)
     return match.group(1) if match else None
+
+
+#: A mutual-fund scheme name, as it appears on an allotment SMS. Kept narrow to
+#: the words every AMC does put at the end, and anchored on a capital letter so
+#: "units of the fund" does not match.
+_SCHEME_RE = re.compile(
+    r"\b([A-Z][A-Za-z0-9&\.\-]*(?:\s+[A-Za-z0-9&\.\-]+){0,8}\s+"
+    r"(?:Fund|Funds|Flexi\s+Cap|ELSS|Growth\s+Plan|Direct\s+Plan))\b"
+)
+
+
+def find_scheme(text: str) -> Optional[str]:
+    match = _SCHEME_RE.search(text)
+    return " ".join(match.group(1).split()) if match else None
 
 
 def find_tracking(text: str) -> Optional[str]:
@@ -574,6 +686,12 @@ _MERCHANT_STOPWORDS = {
     "YOUR", "THE", "A/C", "AC", "ACCOUNT", "CARD", "BANK", "UPI", "VPA", "DEAR", "CUSTOMER",
     "AVAILABLE", "AVL", "BAL", "BALANCE", "RS", "INR", "TXN", "TRANSACTION", "REF", "ON",
     "DT", "DATED", "AND", "WITH", "YOURS", "SIR", "MADAM",
+    # Words that describe the *kind* of movement. "Rs 900 credited towards
+    # refund" was being read as a payment to a merchant called "refund", which
+    # then failed to match the Amazon claim that was waiting for it.
+    "REFUND", "REFUNDED", "REVERSAL", "REVERSED", "CREDIT", "CREDITED", "DEBIT", "DEBITED",
+    "PAYMENT", "PAID", "TRANSFER", "TRANSFERRED", "ORDER", "TOWARDS", "CHARGE", "CHARGES",
+    "FEE", "FEES", "DEPOSIT", "WITHDRAWAL", "SALARY", "INTEREST", "REWARD", "REWARDS",
 }
 
 

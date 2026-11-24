@@ -34,6 +34,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import export_contracts  # noqa: E402
 
+from sms_wiz import rules as filter_rules  # noqa: E402
+
 #: contract file key -> Swift enum name
 SWIFT_ENUMS = {
     "intents": "SMSEventIntent",
@@ -99,6 +101,23 @@ def verify(verbose: bool = False) -> list[str]:
                 errors.append(
                     f"Swift {enum_name} != contracts {key}, difference {sorted(values ^ set(enums.get(key, [])))}"
                 )
+
+    # 3b. Filter rules: authoring file valid, compiled artifact current, and
+    # every route inside what the app can declare.
+    problems = filter_rules.validate_file()
+    errors.extend(problems)
+    try:
+        loaded = filter_rules.load()
+    except filter_rules.RuleError as exc:  # pragma: no cover - validate_file covers it
+        errors.append(str(exc))
+        loaded = []
+    for rule in loaded:
+        if rule.sub_action.value != "none" and rule.sub_action.value not in export_contracts.ENUM_FILES["apple_subactions"]:
+            errors.append(f"rule {rule.id}: sub_action '{rule.sub_action.value}' is not an Apple sub-action")
+    allowed_actions = set(export_contracts.ENUM_FILES["apple_actions"])
+    for rule in loaded:
+        if rule.action.value not in allowed_actions:  # pragma: no cover - parse_rule enforces
+            errors.append(f"rule {rule.id}: action '{rule.action.value}' is not an ILMessageFilterAction")
 
     # 4. Fixtures use only real enum values.
     fixture_files = sorted(FIXTURES.glob("*.json"))
