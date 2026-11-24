@@ -15,6 +15,7 @@
 
 import AppIntents
 import Foundation
+import SMSCore
 import UserNotifications
 
 struct IngestSMSIntent: AppIntent {
@@ -85,29 +86,10 @@ struct IngestSMSIntent: AppIntent {
     }
 }
 
-/// Server location + token live in the App Group so the share extension and the
-/// app agree on them, and so the token is never in the app bundle.
-struct AppConfig {
-    static let appGroupID = "group.com.example.smswiz"
-
-    var baseURL: String
-    var token: String
-
-    static func load() -> AppConfig {
-        let defaults = UserDefaults(suiteName: appGroupID)
-        return AppConfig(
-            baseURL: defaults?.string(forKey: "serverBaseURL") ?? "http://localhost:8000",
-            token: defaults?.string(forKey: "serverToken") ?? ""
-        )
-    }
-
-    static func appendPending(messageBody: String, sender: String) {
-        guard let defaults = UserDefaults(suiteName: appGroupID) else { return }
-        var pending = defaults.array(forKey: "pendingImports") as? [[String: String]] ?? []
-        pending.append(["sender": sender, "body": messageBody])
-        defaults.set(pending, forKey: "pendingImports")
-    }
-}
+// `AppConfig` used to live here. It moved to SMSCore because the share
+// extension needs the same server address and token, and two copies of "where
+// is the server" is how an extension ends up posting to a stale address after
+// the user changes it in Settings. Import SMSCore and use `AppConfig.load()`.
 
 struct ShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {

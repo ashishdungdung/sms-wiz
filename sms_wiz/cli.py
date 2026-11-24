@@ -11,13 +11,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import analytics, cards, catalog, notify, registry, subscriptions, templates
+from . import analytics, cards, catalog, export, notify, registry, subscriptions, templates
 from .db import connect
 from .merchants import MerchantDictionary
 from .models import IngestRequest
@@ -600,6 +601,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     coverage_cmd.add_argument("--json", action="store_true")
 
+    export_cmd = sub.add_parser("export", help="write the ledger out as CSV or one JSON snapshot")
+    export_cmd.add_argument("--format", choices=("csv", "json"), default="csv")
+    export_cmd.add_argument("--out", default=None, help="file to write (default: stdout)")
+    export_cmd.add_argument("--month", default=None, help="only this month, YYYY-MM")
+    export_cmd.add_argument("--db", default=None)
+
     args = parser.parse_args(argv)
 
     if args.command == "demo":
@@ -661,6 +668,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "coverage":
         return run_coverage(as_json=args.json)
+
+    if args.command == "export":
+        if args.month and not re.fullmatch(r"\d{4}-(?:0[1-9]|1[0-2])", args.month):
+            print(f"month must be YYYY-MM, got {args.month!r}", file=sys.stderr)
+            return 2
+        conn = connect(args.db)
+        try:
+            if args.format == "csv":
+                text = export.to_csv(export.event_rows(conn, month=args.month))
+            else:
+                text = export.to_json(conn, month=args.month)
+            count = len(export.event_rows(conn, month=args.month))
+        finally:
+            conn.close()
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"wrote {args.out} ({count} events, {len(text.encode('utf-8'))} bytes)")
+        else:
+            print(text, end="")
+        return 0
 
     if args.command in {"analytics", "subscriptions", "cards", "merchants", "digest"}:
         rows = _stored_rows(args.db)

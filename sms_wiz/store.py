@@ -461,6 +461,84 @@ def list_vouchers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------
+# Merchant review
+# --------------------------------------------------------------------------
+
+
+def unresolved_merchants(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, Any]]:
+    """Raw merchant strings the dictionary could not name, most frequent first.
+
+    This is the queue the review UI shows. It reads the *events*, not the
+    dictionary, because the question is "what did the ledger fail to name",
+    and a merchant that was never stored cannot answer that.
+    """
+    rows = conn.execute(
+        """
+        SELECT merchant_raw AS raw,
+               COUNT(*) AS seen,
+               MAX(received_at) AS last_seen,
+               ROUND(SUM(COALESCE(amount_value, 0)), 2) AS total_amount,
+               MIN(event_id) AS example_event_id,
+               MAX(category) AS category
+        FROM events
+        WHERE merchant_raw IS NOT NULL
+          AND TRIM(merchant_raw) != ''
+          AND (merchant_clean IS NULL OR TRIM(merchant_clean) = '')
+        GROUP BY LOWER(TRIM(merchant_raw))
+        ORDER BY seen DESC, last_seen DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def reassign_merchant(
+    conn: sqlite3.Connection,
+    raw: str,
+    clean: str,
+    category: Optional[str] = None,
+) -> int:
+    """Rename a merchant on the events already stored, and return how many.
+
+    Learning a name only affects *future* messages, which makes the review UI a
+    lie: the user corrects a shop and the list does not change. Both the indexed
+    columns and the stored payload are rewritten, so `/events`, `/overview` and
+    the CSV export agree afterwards.
+    """
+    wanted = raw.strip().lower()
+    if not wanted:
+        return 0
+    rows = conn.execute(
+        "SELECT event_id, payload, category FROM events WHERE LOWER(TRIM(merchant_raw)) = ?",
+        (wanted,),
+    ).fetchall()
+    for row in rows:
+        new_category = category or row["category"]
+        conn.execute(
+            "UPDATE events SET merchant_clean = ?, category = COALESCE(?, category) WHERE event_id = ?",
+            (clean, category, row["event_id"]),
+        )
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            continue
+        merchant = payload.get("merchant") or {}
+        merchant.update({"clean": clean, "source": "user", "confidence": 1.0})
+        if new_category:
+            merchant["category"] = new_category
+        payload["merchant"] = merchant
+        if new_category:
+            payload["category"] = new_category
+        flags = payload.get("flags")
+        if isinstance(flags, list) and "merchant_unresolved" in flags:
+            flags.remove("merchant_unresolved")
+        conn.execute("UPDATE events SET payload = ? WHERE event_id = ?", (json.dumps(payload), row["event_id"]))
+    conn.commit()
+    return len(rows)
+
+
+# --------------------------------------------------------------------------
 # Alerts
 # --------------------------------------------------------------------------
 

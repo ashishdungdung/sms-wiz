@@ -592,6 +592,99 @@ _RAW_TEMPLATES: tuple[tuple[str, str, tuple[str, ...], str, str, str], ...] = (
         "debit",
         "Rs.400 debited from your a/c XX1234",
     ),
+    # -- Banks added from the public message corpus ------------------------
+    # These were the institutions with no shape of their own: every message
+    # fell through to the generic extractors, which is where field accuracy
+    # goes first (``A/c XXXXXXXX1234`` vs ``Card ending 1234``). One real,
+    # redacted message per bank lives in
+    # ``tests/fixtures/bank_templates/public_messages.json``.
+    (
+        "boi.debit_with",
+        "Bank of India",
+        ("BOIIND",),
+        rf"your\s+A/c\s*(?:no\.?\s*)?(?:XX+X*)?(?P<last4>\d{{4}})\s+has\s+been\s+debited\s+with\s+"
+        rf"Rs\.?\s*{_NUM}",
+        "debit",
+        "Your A/c XXXXXXXX1234 has been debited with Rs.1,500.00",
+    ),
+    (
+        "boi.credit_with",
+        "Bank of India",
+        ("BOIIND",),
+        rf"your\s+A/c\s*(?:no\.?\s*)?(?:XX+X*)?(?P<last4>\d{{4}})\s+has\s+been\s+credited\s+with\s+"
+        rf"Rs\.?\s*{_NUM}",
+        "credit",
+        "Your A/c XXXXXXXX1234 has been credited with Rs.5,000.00",
+    ),
+    (
+        "cbi.debit_by",
+        "Central Bank of India",
+        ("CBIN",),
+        rf"(?:your\s+)?A/c\s*(?:no\.?\s*)?(?:XX+X*)?(?P<last4>\d{{4}})\s+debited\s+by\s+Rs\.?\s*{_NUM}",
+        "debit",
+        "Your A/c XXXXXXXX1234 debited by Rs.2,000.00 on 24-11-26",
+    ),
+    (
+        "cbi.credit_by",
+        "Central Bank of India",
+        ("CBIN",),
+        rf"(?:your\s+)?A/c\s*(?:no\.?\s*)?(?:XX+X*)?(?P<last4>\d{{4}})\s+credited\s+by\s+Rs\.?\s*{_NUM}",
+        "credit",
+        "Your A/c XXXXXXXX1234 credited by Rs.12,000.00",
+    ),
+    (
+        "citi.card_used_for",
+        "Citibank India",
+        ("CITIBN",),
+        rf"(?:Citibank|Citi)\s+Card\s+ending\s+(?:with\s+)?(?P<last4>\d{{4}})\s+has\s+been\s+used\s+for\s+"
+        rf"Rs\.?\s*{_NUM}"
+        r"(?:\s+at\s+(?P<merchant>[A-Za-z0-9][A-Za-z0-9 .&_\-]{2,38}?))?(?:\s+on\s+[\d\-A-Za-z]+|\.|$)",
+        "debit",
+        "Your Citibank Card ending 1234 has been used for Rs 1,299.00 at AMAZON",
+    ),
+    (
+        "dbs.account_debited",
+        "DBS Bank India",
+        ("DBSBNK",),
+        rf"DBS\s+Bank\s+Account\s*(?:no\.?\s*)?(?:XX+)?(?P<last4>\d{{4}})\s+has\s+been\s+debited\s+by\s+"
+        rf"(?:INR|Rs\.?)\s*{_NUM}",
+        "debit",
+        "Your DBS Bank Account XX1234 has been debited by INR 1,500.00",
+    ),
+    (
+        "dcb.debited_from",
+        "DCB Bank",
+        ("DCBBNK",),
+        rf"Rs\.?\s*{_NUM}\s+has\s+been\s+debited\s+from\s+your\s+DCB\s+Bank\s+A/c\s*(?:XX+)?(?P<last4>\d{{4}})",
+        "debit",
+        "Rs.500.00 has been debited from your DCB Bank A/c XX1234",
+    ),
+    (
+        "cub.debited_for",
+        "City Union Bank",
+        ("CUBANK",),
+        rf"Your\s+A/c\s*(?:No\.?\s*)?(?:XX+)?(?P<last4>\d{{4}})\s+debited\s+for\s+Rs\.?\s*{_NUM}",
+        "debit",
+        "Your A/c No XX1234 debited for Rs.1,000.00 on 24/11/2026",
+    ),
+    (
+        "bom.debited_by",
+        "Bank of Maharashtra",
+        ("BOMIND",),
+        rf"Your\s+A/c\s*(?:no\.?\s*)?(?:XX+)?(?P<last4>\d{{4}})\s+has\s+been\s+debited\s+by\s+Rs\.?\s*{_NUM}",
+        "debit",
+        "Your A/c XX1234 has been debited by Rs.500.00",
+    ),
+    (
+        "amex.charged",
+        "American Express",
+        ("AMEXIN",),
+        rf"American\s+Express\s+Card\s+ending\s+(?:with\s+)?(?P<last4>\d{{4}})\s+has\s+been\s+charged\s+"
+        rf"Rs\.?\s*{_NUM}"
+        r"(?:\s+at\s+(?P<merchant>[A-Za-z0-9][A-Za-z0-9 .&_\-]{2,38}?))?(?:\s+on\s+[\d\-A-Za-z]+|\.|$)",
+        "debit",
+        "Your American Express Card ending 3005 has been charged Rs 2,500.00 at AMAZON",
+    ),
     # -- Wallets / instruments --------------------------------------------
     (
         "fastag.recharge",

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Share extension Info.plist — paste these keys into the plist Xcode creates
+  with the target (File ▸ New ▸ Target ▸ Share Extension), or replace it.
+
+  The activation rule is the whole design decision in this file: text and URLs
+  only. If the extension also claimed images or files, it would appear in the
+  share sheet for photos and PDFs, where it has nothing useful to do.
+
+  `NSExtensionPrincipalClass` must match the class in ShareViewController.swift
+  *and* the module name. With Xcode's default naming the class is
+  `$(PRODUCT_MODULE_NAME).ShareViewController` — keep the $(...) form, it
+  survives a target rename.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>File with SMS Wiz</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.share-services</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>NSExtensionActivationRule</key>
+            <dict>
+                <key>NSExtensionActivationSupportsText</key>
+                <true/>
+                <key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+                <integer>1</integer>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>

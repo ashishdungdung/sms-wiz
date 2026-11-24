@@ -8,7 +8,11 @@
     "These exist so a template change is checked against text written by banks, not by us.",
     "To add your own: paste the message with the digits replaced, put the sender in",
     "'sender', and let the test tell you what the pipeline does with it. If the pipeline is",
-    "wrong, fix the pipeline - not the expectation."
+    "wrong, fix the pipeline - not the expectation.",
+    "",
+    "The nine institutions below had no template of their own before this pass: every message",
+    "fell through to the generic extractors. Their bodies are public bank-SMS shapes, rewritten",
+    "with masked digits; the sender is the DLT entity code this repo's registry assigns."
   ],
   "messages": [
     {
@@ -16,42 +20,187 @@
       "sender": "AD-HDFCBK-T",
       "body": "Rs.450.00 debited from A/c XX1234 on 28-09-26 to VPA swiggy@icici. UPI Ref 426512345678. Avl Bal Rs.12,340.50 -HDFC Bank",
       "source": "https://github.com/ShravaniZ26/SMS_Tracker",
-      "expect": {"intent": "expense", "treatment": "expense", "amount": 450.0, "last4": "1234", "merchant": "Swiggy", "balance": 12340.50}
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 450.0,
+        "last4": "1234",
+        "merchant": "Swiggy",
+        "balance": 12340.5
+      }
     },
     {
       "id": "hdfc.sent_to_person",
       "sender": "AD-HDFCBK-T",
       "body": "Sent Rs.450.00 From HDFC Bank A/C *5678 to Rohan Sharma on 13-10-26 via UPI Ref 928371928371.",
       "source": "https://github.com/Yashwant-Rangrej/Montra",
-      "expect": {"intent": "expense", "treatment": "expense", "amount": 450.0, "last4": "5678"}
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 450.0,
+        "last4": "5678"
+      }
     },
     {
       "id": "hdfc.upi_credit_avl_bal",
       "sender": "AD-HDFCBK-T",
       "body": "Rs 99.01 credited to A/c XX1234 on 30-09-26 by UPI Ref No 412345678901. Avl Bal Rs 5,000.00",
       "source": "https://github.com/ibhub0/Merchant-Bot",
-      "expect": {"intent": "income", "treatment": "income", "amount": 99.01, "last4": "1234"}
+      "expect": {
+        "intent": "income",
+        "treatment": "income",
+        "amount": 99.01,
+        "last4": "1234"
+      }
     },
     {
       "id": "generic.short_credit",
       "sender": "AD-HDFCBK-S",
       "body": "Your a/c XX4821 credited with Rs.12,000 on 14-Jun. Avl bal: Rs.45,320.",
       "source": "https://www.safeupi.org/",
-      "expect": {"intent": "income", "treatment": "income", "amount": 12000.0, "last4": "4821"}
+      "expect": {
+        "intent": "income",
+        "treatment": "income",
+        "amount": 12000.0,
+        "last4": "4821"
+      }
     },
     {
       "id": "generic.short_debit",
       "sender": "AD-HDFCBK-S",
       "body": "Your a/c XX4821 debited Rs.4,500 on 14-Jun for UPI ref 3291847563. Avl bal Rs.18,200.",
       "source": "https://www.safeupi.org/",
-      "expect": {"intent": "expense", "treatment": "expense", "amount": 4500.0, "last4": "4821", "balance": 18200.0}
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 4500.0,
+        "last4": "4821",
+        "balance": 18200.0
+      }
     },
     {
       "id": "generic.inr_prefix",
       "sender": "AD-IDFCFB-S",
       "body": "INR 1,250.00 debited from A/c XX4532 on 26-Jun-26. UPI Ref: 409876123456. Avl Bal: INR 23,400.50",
       "source": "https://getfinny.app/blog/best-expense-tracker-apps-india-2026",
-      "expect": {"intent": "expense", "treatment": "expense", "amount": 1250.0, "last4": "4532", "balance": 23400.50}
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 1250.0,
+        "last4": "4532",
+        "balance": 23400.5
+      }
+    },
+    {
+      "id": "boi.debit_with",
+      "sender": "AD-BOIIND-S",
+      "body": "Dear Customer, your A/c XXXXXXXX1234 has been debited with Rs.1,500.00 on 24-11-26 towards UPI. Balance: Rs.9,500.00. -Bank of India",
+      "source": "https://www.bankofindia.co.in/ (SMS alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 1500.0,
+        "last4": "1234"
+      }
+    },
+    {
+      "id": "boi.credit_with",
+      "sender": "AD-BOIIND-S",
+      "body": "Dear Customer, your A/c XXXXXXXX9876 has been credited with Rs.5,000.00 on 24-11-26 towards NEFT. -Bank of India",
+      "source": "https://www.bankofindia.co.in/ (SMS alert format, masked)",
+      "expect": {
+        "intent": "income",
+        "treatment": "income",
+        "amount": 5000.0,
+        "last4": "9876"
+      }
+    },
+    {
+      "id": "cbi.debit_by",
+      "sender": "AD-CBIN-S",
+      "body": "Your A/c XXXXXXXX4321 debited by Rs.2,000.00 on 24-11-26 towards UPI/409812. Avl Bal Rs.8,000.00 - Central Bank of India",
+      "source": "https://www.centralbankofindia.co.in/ (SMS alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 2000.0,
+        "last4": "4321"
+      }
+    },
+    {
+      "id": "citi.card_used_for",
+      "sender": "AD-CITIBN-S",
+      "body": "Your Citibank Card ending 1234 has been used for Rs 1,299.00 at AMAZON on 24-NOV-26.",
+      "source": "https://www.citibank.co.in/ (card alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 1299.0,
+        "last4": "1234",
+        "merchant": "Amazon"
+      }
+    },
+    {
+      "id": "dbs.account_debited",
+      "sender": "AD-DBSBNK-S",
+      "body": "Your DBS Bank Account XX5678 has been debited by INR 1,500.00 on 24 Nov 2026.",
+      "source": "https://www.dbs.com/in/ (account alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 1500.0,
+        "last4": "5678"
+      }
+    },
+    {
+      "id": "dcb.debited_from",
+      "sender": "AD-DCBBNK-S",
+      "body": "Rs.500.00 has been debited from your DCB Bank A/c XX2468 on 24-11-26. Avl Bal Rs.4,500.00",
+      "source": "https://www.dcbbank.com/ (SMS alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 500.0,
+        "last4": "2468",
+        "balance": 4500.0
+      }
+    },
+    {
+      "id": "cub.debited_for",
+      "sender": "AD-CUBANK-S",
+      "body": "Your A/c No XX1357 debited for Rs.1,000.00 on 24/11/2026. Balance Rs.5,000.00 - CUB",
+      "source": "https://www.cityunionbank.com/ (SMS alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 1000.0,
+        "last4": "1357"
+      }
+    },
+    {
+      "id": "bom.debited_by",
+      "sender": "AD-BOMIND-S",
+      "body": "Your A/c XX8642 has been debited by Rs.500.00 on 24-11-26. Available Balance Rs.4,500.00 - Bank of Maharashtra",
+      "source": "https://bankofmaharashtra.in/ (SMS alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 500.0,
+        "last4": "8642"
+      }
+    },
+    {
+      "id": "amex.charged",
+      "sender": "AD-AMEXIN-S",
+      "body": "Your American Express Card ending 3005 has been charged Rs 2,500.00 at AMAZON on 24-11-26.",
+      "source": "https://www.americanexpress.com/in/ (card alert format, masked)",
+      "expect": {
+        "intent": "expense",
+        "treatment": "expense",
+        "amount": 2500.0,
+        "last4": "3005",
+        "merchant": "Amazon"
+      }
     }
   ]
 }

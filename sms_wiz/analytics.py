@@ -17,6 +17,7 @@ Rules that keep the totals honest
 
 from __future__ import annotations
 
+import calendar
 import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -202,10 +203,22 @@ def _accumulate(totals: PeriodTotals, rows: Iterable[dict[str, Any]]) -> PeriodT
     return totals
 
 
+def month_end(month: str) -> str:
+    """The last real day of ``YYYY-MM``.
+
+    It used to be hard-coded to ``-31``, so November's period ended on a date
+    that does not exist. Anything that parses the payload (the iOS app does)
+    then either rejects it or shows the wrong range.
+    """
+    year, month_number = (int(part) for part in month.split("-"))
+    last_day = calendar.monthrange(year, month_number)[1]
+    return f"{month}-{last_day:02d}"
+
+
 def month_totals(rows: Iterable[dict[str, Any]], month: str) -> PeriodTotals:
     """``month`` is ``YYYY-MM`` in IST."""
     selected = [r for r in rows if (received(r) and received(r).strftime("%Y-%m")) == month]  # type: ignore[union-attr]
-    totals = PeriodTotals(label=month, start=f"{month}-01", end=f"{month}-31")
+    totals = PeriodTotals(label=month, start=f"{month}-01", end=month_end(month))
     return _accumulate(totals, selected)
 
 

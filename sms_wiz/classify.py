@@ -241,6 +241,22 @@ DEBIT_VERBS = re.compile(
     r"sent|deducted|charged|billed|dr\b)\b",
     re.IGNORECASE,
 )
+#: Card programmes write a spend as "your card has been used for Rs X at SHOP"
+#: (Citibank, Amex, HSBC). Kept separate from :data:`DEBIT_VERBS` and gated on
+#: the word "card", because "Rs 5,000 has been used for a package tour" in a
+#: marketing message is not a movement this ledger can vouch for.
+_CARD_USE = re.compile(r"\bused\s+(?:for|at)\b", re.IGNORECASE)
+_CARD_WORD = re.compile(r"\bcard\b", re.IGNORECASE)
+
+
+def _debit_signal(text: str) -> Optional[re.Match[str]]:
+    """A debit verb, or a card-use sentence that is about a card."""
+    match = DEBIT_VERBS.search(text)
+    if match is not None:
+        return match
+    if _CARD_WORD.search(text):
+        return _CARD_USE.search(text)
+    return None
 CREDIT_VERBS = re.compile(
     r"\b(?:credited|credit|received|refunded|reversed|deposited|salary|cashback|cr\b)\b",
     re.IGNORECASE,
@@ -585,7 +601,7 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
         return Intent.SELF_TRANSFER, 0.85, evidence, flags
 
     # 14. Real money movement ---------------------------------------------
-    debit = DEBIT_VERBS.search(ctx.text)
+    debit = _debit_signal(ctx.text)
     # "Credit Card" and "credit limit" are nouns, not credits. Matching them as
     # a credit verb made every card payment read as ambiguous.
     credit_text = re.sub(r"credit\s+(?:card|limit)", " ", ctx.text, flags=re.IGNORECASE)

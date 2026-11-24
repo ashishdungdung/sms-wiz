@@ -17,12 +17,13 @@ from __future__ import annotations
 import hmac
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from . import analytics, cards, notify, rules, subscriptions, templates
+from . import analytics, cards, export, notify, rules, subscriptions, templates
 from .catalog import CATEGORIES as CATEGORY_TAXONOMY
 from .classify import analyse
 from .db import connect
@@ -37,7 +38,7 @@ from .models import (
     MonthSummary,
     SmsEvent,
 )
-from . import extract
+from . import extract, store
 from .pipeline import Ingestor
 from .store import (
     list_alerts,
@@ -402,9 +403,53 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         clean: str = Body(embed=True),
         category: str = Body(default="Uncategorized", embed=True),
     ) -> dict[str, Any]:
-        """User corrections always outrank seeds and anything the model learned."""
+        """User corrections always outrank seeds and anything the model learned.
+
+        A correction is not learning for the future only: events already stored
+        with this raw string are renamed here too, or the review list the user
+        is looking at would never shrink.
+        """
         merchants.learn(raw, clean, category, source="user")
-        return {"status": "ok", "raw": raw, "clean": clean, "category": category}
+        c = conn()
+        try:
+            updated = store.reassign_merchant(c, raw, clean, category if category != "Uncategorized" else None)
+        finally:
+            c.close()
+        return {
+            "status": "ok",
+            "raw": raw,
+            "clean": clean,
+            "category": category,
+            "events_updated": updated,
+        }
+
+    @app.get("/api/v1/merchants/unresolved")
+    def merchant_unresolved(limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+        """The review queue: merchants the ledger recorded but could not name.
+
+        Each row carries ``suggested`` — what the dictionary *would* call it
+        now, if anything — so the UI can offer a one-tap accept instead of an
+        empty text field.
+        """
+        c = conn()
+        try:
+            rows = store.unresolved_merchants(c, limit=limit)
+        finally:
+            c.close()
+        out = []
+        for row in rows:
+            match = merchants.resolve(row["raw"] or "")
+            out.append(
+                {
+                    **row,
+                    "suggested": (
+                        {"clean": match.clean, "category": match.category, "confidence": match.score}
+                        if match
+                        else None
+                    ),
+                }
+            )
+        return out
 
     @app.get("/api/v1/apple/capabilities")
     def apple_capabilities() -> dict[str, Any]:
@@ -512,6 +557,36 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
     @app.get("/api/v1/templates")
     def template_catalog() -> list[dict[str, Any]]:
         return templates.catalog()
+
+    @app.get("/api/v1/export.csv", response_class=PlainTextResponse)
+    def export_csv(month: Optional[str] = None) -> PlainTextResponse:
+        """Every event as CSV. The exit door: no lock-in, no binary format."""
+        c = conn()
+        try:
+            text = export.to_csv(export.event_rows(c, month=_check_month(month)))
+        finally:
+            c.close()
+        name = export.filename(datetime.now(timezone.utc), "csv")
+        return PlainTextResponse(
+            text,
+            media_type="text/csv; charset=utf-8",
+            headers={"content-disposition": f'attachment; filename="{name}"'},
+        )
+
+    @app.get("/api/v1/export.json", response_class=PlainTextResponse)
+    def export_json(month: Optional[str] = None) -> PlainTextResponse:
+        """The whole store in one object: events, refunds, vouchers, balances, dictionary."""
+        c = conn()
+        try:
+            text = export.to_json(c, month=_check_month(month))
+        finally:
+            c.close()
+        name = export.filename(datetime.now(timezone.utc), "json")
+        return PlainTextResponse(
+            text,
+            media_type="application/json; charset=utf-8",
+            headers={"content-disposition": f'attachment; filename="{name}"'},
+        )
 
     @app.get("/api/v1/rules")
     def rule_catalog() -> dict[str, Any]:

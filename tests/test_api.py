@@ -140,6 +140,47 @@ class TestMerchantCorrection:
         assert merchant["clean"] == "Sai Teja Kirana"
         assert merchant["source"] == "user"
 
+    def test_a_correction_renames_the_events_already_stored(self, client):
+        """The review list has to shrink when the user fixes a name."""
+        body = "Rs 320.00 spent at ANNAPURNA HOTELS on your card."
+        post_sms(client, body=body)
+
+        queue = client.get("/api/v1/merchants/unresolved").json()
+        assert [row["raw"] for row in queue] == ["ANNAPURNA HOTELS"]
+        assert queue[0]["seen"] == 1
+        assert queue[0]["example_event_id"]
+
+        response = client.post(
+            "/api/v1/merchants",
+            json={
+                "raw": "ANNAPURNA HOTELS",
+                "clean": "Annapurna Hotels",
+                "category": "Food & Dining",
+            },
+        )
+        assert response.json()["events_updated"] == 1
+
+        assert client.get("/api/v1/merchants/unresolved").json() == []
+        stored = client.get("/api/v1/events").json()[0]
+        assert stored["merchant_clean"] == "Annapurna Hotels"
+        assert stored["category"] == "Food & Dining"
+        detail = client.get(f"/api/v1/events/{stored['event_id']}").json()
+        assert detail["merchant"]["clean"] == "Annapurna Hotels"
+        assert "merchant_unresolved" not in detail["flags"]
+
+    def test_the_queue_groups_repeats_and_ranks_by_frequency(self, client):
+        post_sms(client, body="Rs 40.00 spent at CHAI POINT on your card.")
+        post_sms(client, body="Rs 45.00 spent at CHAI POINT on your card.")
+        post_sms(client, body="Rs 900.00 spent at ONE OFF GARAGE on your card.")
+        queue = client.get("/api/v1/merchants/unresolved").json()
+        assert queue[0]["raw"] == "CHAI POINT"
+        assert queue[0]["seen"] == 2
+        assert queue[0]["total_amount"] == pytest.approx(85.0)
+
+    def test_a_known_merchant_never_enters_the_queue(self, client):
+        post_sms(client, body="Rs 249.00 spent at SWIGGY on your card.")
+        assert client.get("/api/v1/merchants/unresolved").json() == []
+
 
 class TestAuth:
     def test_token_is_enforced_when_configured(self, client, monkeypatch):
@@ -229,3 +270,75 @@ class TestDomainViews:
         body = client.get("/api/v1/overview?month=2025-03").json()
         assert {"investments", "travel", "bills"} <= set(body)
         assert body["month"]["spend"] == pytest.approx(500.0)
+
+
+@pytest.mark.parametrize("source", ["share", "clipboard", "shortcut", "manual"])
+def test_ios_import_sources_are_accepted(client, source):
+    """The share extension and the paste screen are the two paths that work.
+
+    They used to send `"share"`/`"clipboard"` and get a 422 back from a
+    four-value Literal, which is exactly the kind of mismatch no test would have
+    caught: the Swift client was written against the intent, not the schema.
+    """
+    response = client.post(
+        "/api/v1/ingest-sms",
+        json={
+            "sender": "AD-HDFCBK-T",
+            "body": "Rs 450 debited from A/c XX1234 to VPA swiggy@okaxis on 24-11-26.",
+            "source": source,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["event"]["source"] == source
+
+
+def test_ingest_answer_has_the_shape_the_swift_client_decodes(client):
+    """Field-for-field what `IngestResult` in APIClient.swift reads."""
+    payload = client.post(
+        "/api/v1/ingest-sms",
+        json={"sender": "AD-HDFCBK-T", "body": "Rs 450 debited to VPA swiggy@okaxis.", "source": "share"},
+    ).json()
+    assert set(payload) >= {"event", "alerts", "stored", "duplicate_of"}
+    event = payload["event"]
+    assert set(event) >= {"event_id", "summary", "intent", "confidence"}
+    assert isinstance(event["confidence"]["needs_review"], bool)
+    assert all({"severity", "kind", "message"} <= set(alert) for alert in payload["alerts"])
+
+
+def test_correction_renames_stored_events_and_the_review_list_shrinks(client):
+    """Learning a name only for *future* messages would make the review UI a lie.
+
+    The user names a shop, and both the queue and the month's category totals
+    must move — otherwise correcting the same merchant every month is the
+    punishment for having used the app.
+    """
+    posted = client.post(
+        "/api/v1/ingest-sms",
+        json={
+            "sender": "AD-HDFCBK-T",
+            "body": "Rs 250 debited from A/c XX1234 to VPA qwertyzshop@okaxis on 24-11-26.",
+            "source": "share",
+        },
+    ).json()
+    assert posted["event"]["merchant"]["clean"] is None
+
+    queue = client.get("/api/v1/merchants/unresolved").json()
+    assert [row["raw"] for row in queue] == ["qwertyzshop"]
+    assert queue[0]["seen"] == 1 and queue[0]["total_amount"] == 250.0
+    before = client.get("/api/v1/overview").json()["month"]
+    assert before["by_category"] == {"Uncategorized": 250.0}
+
+    answer = client.post(
+        "/api/v1/merchants",
+        json={
+            "raw": "qwertyzshop",
+            "clean": "Qwerty Shop",
+            "category": "Groceries & Quick Commerce",
+        },
+    ).json()
+    assert answer["events_updated"] == 1
+
+    after = client.get("/api/v1/overview").json()["month"]
+    assert after["by_category"] == {"Groceries & Quick Commerce": 250.0}
+    assert after["essential_share"] == 1.0
+    assert client.get("/api/v1/merchants/unresolved").json() == []

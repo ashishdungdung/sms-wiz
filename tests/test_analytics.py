@@ -152,3 +152,17 @@ class TestFocusedViews:
         assert data["month"]["spend"] == pytest.approx(1000.0)
         assert {"month", "weeks", "top_merchants", "upi", "categories"} <= set(data)
         assert {"spend", "income", "refunds", "excluded", "essential_share"} <= set(data["month"])
+
+class TestMonthRange:
+    """`end` must be a date that exists: November has 30 days, not 31."""
+
+    def test_month_end_matches_the_calendar(self):
+        from sms_wiz.analytics import month_end, month_totals
+
+        assert month_end("2026-11") == "2026-11-30"
+        assert month_end("2026-02") == "2026-02-28"
+        assert month_end("2024-02") == "2024-02-29"  # leap year
+        assert month_end("2026-01") == "2026-01-31"
+        totals = month_totals([], "2026-11")
+        assert totals.start == "2026-11-01"
+        assert totals.end == "2026-11-30"
