@@ -5,6 +5,11 @@
 //  A decode-only mirror of the server's event schema (see docs/schema.md).
 //  NOT COMPILED OR TESTED IN THIS REPOSITORY.
 //
+//  Scope: this file is the *screen* mirror — every field a SwiftUI view might
+//  render. The wire calls live in SMSCore (`APIClient`) with a deliberately
+//  smaller set of DTOs, because the share extension needs those and must not
+//  depend on the app target.
+//
 //  Rule of thumb for the UI: always render `summary` + `evidence`, and put
 //  anything with `confidence.needs_review == true` in a "Verify" queue instead
 //  of the ledger. Nothing here should ever be shown as certain when the server

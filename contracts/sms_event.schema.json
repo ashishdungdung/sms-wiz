@@ -1225,7 +1225,9 @@
         "filter",
         "shortcut",
         "manual",
-        "import"
+        "import",
+        "share",
+        "clipboard"
       ],
       "title": "Source",
       "type": "string"

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ CONTRACTS = ROOT / "contracts"
 
 sys.path.insert(0, str(ROOT))
 
+from sms_wiz import registry as sender_registry  # noqa: E402
 from sms_wiz import rules as filter_rules  # noqa: E402
 from sms_wiz.models import (  # noqa: E402
     AppleAction,
@@ -57,8 +59,37 @@ def build() -> dict[Path, str]:
         "ios/Packages/SMSCore/Sources/SMSCore/Contracts.swift; `make verify-contracts` enforces it.",
         **ENUM_FILES,
     }
+    # The filter extension has no Python registry, but several security rules
+    # only fire for "personal_mobile" or "bank" senders. Guessing the kind from
+    # the header shape is how a genuine bank KYC reminder gets junked by the
+    # extension while the server allows it, so the registry ships as data.
+    kinds: dict[str, str] = {}
+    # `UNIQUE_ENTITIES` is last-definition-wins, which is what
+    # `ENTITIES_BY_CODE` resolves — the same answer the server gives.
+    for entity in sender_registry.UNIQUE_ENTITIES:
+        code = getattr(entity, "code", None)
+        if code:
+            kinds[code.upper()] = entity.kind.value
+    # `parse_sender` also accepts an alias code (AD-CDSL-S alongside
+    # AD-CDSLIN-S). The extension has no alias table of its own, so the export
+    # carries the resolution rather than the source.
+    for alias, entry in sender_registry.ALIAS_INDEX.items():
+        # Only header-shaped keys. The alias index also holds phrases like
+        # "HDFC BANK" for matching message *text*; a real DLT header has no
+        # spaces, and `parse_sender` would call that sender unknown, so shipping
+        # it here would make the extension disagree with the server.
+        if re.fullmatch(r"[A-Z0-9]{2,9}", alias.upper()):
+            kinds.setdefault(alias.upper(), entry.kind.value)
+    sender_kinds = {
+        "_comment": "Generated from sms_wiz/registry.py. SenderKind.swift resolves a DLT header "
+        "to the same kind the server uses; anything absent is 'unknown'.",
+        "syntax": "sms-wiz.sender_kinds/v1",
+        "default": EntityKind.UNKNOWN.value,
+        "codes": dict(sorted(kinds.items())),
+    }
     return {
         CONTRACTS / "sms_event.schema.json": json.dumps(schema, indent=2, sort_keys=True) + "\n",
+        CONTRACTS / "sender_kinds.json": json.dumps(sender_kinds, indent=2, sort_keys=True) + "\n",
         CONTRACTS / "enums.json": json.dumps(enums, indent=2, sort_keys=True) + "\n",
         # Compiled from rules/filter_rules.json; shipped to the iOS extension.
         CONTRACTS / "filter_rules.json": json.dumps(

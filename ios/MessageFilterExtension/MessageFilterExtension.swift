@@ -15,6 +15,7 @@
 
 import IdentityLookup
 import Foundation
+import SMSCore
 
 final class MessageFilterExtension: ILMessageFilterExtension {}
 
@@ -72,7 +73,15 @@ extension MessageFilterExtension: ILMessageFilterQueryHandling {
             return
         }
 
-        // 2. Anything undecided may be deferred to the server. Keep this rare:
+        // 2. Issuer-authored rules, evaluated locally from the compiled file.
+        //    Same rules as the server's fast path, same verdicts — pinned by
+        //    tests/fixtures/filter_rules/cases.json on both sides.
+        if let decision = Self.applyIssuerRules(sender: sender, body: body) {
+            completion(decision)
+            return
+        }
+
+        // 3. Anything undecided may be deferred to the server. Keep this rare:
         //    the deadline is short and a timeout means "allow".
         context.deferQueryRequestToNetwork { networkResponse, error in
             guard error == nil,
@@ -121,6 +130,49 @@ extension MessageFilterExtension: ILMessageFilterQueryHandling {
         }
 
         return nil
+    }
+
+    // MARK: Issuer rules (bundled, offline)
+
+    /// Loaded once per extension process. `nil` (missing or broken file) means
+    /// "no local opinion", and the message falls through to the server or allow.
+    private static let ruleSet = FilterRuleSet.bundled()
+    private static let senderKinds = SenderKind.bundled()
+
+    private static func applyIssuerRules(sender: String, body: String) -> ILMessageFilterQueryResponse? {
+        guard let ruleSet else { return nil }
+        let kind = SenderKind.resolve(sender, using: senderKinds)
+        guard let verdict = ruleSet.verdict(sender: sender, body: body, senderKind: kind) else {
+            return nil
+        }
+        let response = ILMessageFilterQueryResponse()
+        switch verdict.action {
+        case .allow:       return nil  // no opinion is the same as allow, but keep the network path
+        case .junk:        response.action = .junk
+        case .promotion:   response.action = .promotion
+        case .transaction: response.action = .transaction
+        }
+        response.subAction = Self.subAction(for: verdict.subAction)
+        return response
+    }
+
+    /// `SMSCore.AppleSubAction` → iOS's own enum. The one conversion that has to
+    /// stay explicit: a mismatch here is silently dropped by iOS.
+    private static func subAction(for value: SMSCore.AppleSubAction) -> ILMessageFilterSubAction {
+        switch value {
+        case .none: return .none
+        case .transactionalFinance: return .transactionalFinance
+        case .transactionalOrders: return .transactionalOrders
+        case .transactionalReminders: return .transactionalReminders
+        case .transactionalRewards: return .transactionalRewards
+        case .transactionalPublicServices: return .transactionalPublicServices
+        case .promotionalOffers: return .promotionalOffers
+        case .promotionalCoupons: return .promotionalCoupons
+        case .transactionalOthers, .transactionalHealth, .transactionalWeather,
+             .transactionalCarrier, .promotionalOthers:
+            // Not declared by this app; iOS would discard them anyway.
+            return .none
+        }
     }
 
     // MARK: Network response

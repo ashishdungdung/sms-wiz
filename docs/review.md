@@ -88,6 +88,15 @@ alone.
 
 Counts after this pass: **753 declared keys, 716 distinct, 716 matchable, 333 brands, 21 categories.**
 
+### Analytics
+
+- **Month ranges ended in impossible dates.** `month_totals` built its window with
+  `f"{month}-31"`, so November reported `2026-11-31` and February `2026-02-31`.
+  The ledger totals were right — the *dates* were not, and any client that parses
+  them rejects the month or displays a day that does not exist. Found while
+  writing the Swift `MonthView` decoder. Now `calendar.monthrange`, with
+  `TestMonthRange` pinning leap and non-leap February.
+
 ### Console
 
 | Symptom | Why it happened | Fix |
@@ -117,11 +126,14 @@ Counts after this pass: **753 declared keys, 716 distinct, 716 matchable, 333 br
 | LLM enrichment against a live endpoint | Written, not tested here | off by default, and the suite asserts it stays off |
 | Short brand keys match as whole words only | Built and tested | `jio.com` does not match `JIO`; that is intended |
 | Refund cover window of 45 days | Built and tested | longer than any Indian refund SLA; measured from the credit's own timestamp |
+| The iOS app, share extension and filter/rule evaluators | Written, not compiled | no Swift toolchain here; see `ios/README.md` for the status table and `make swift-test` for the one command that would change it |
+| Offline sender-kind resolution | Written, not compiled | `contracts/sender_kinds.json` mirrors `parse_sender` over 1,197 senders with 0 mismatches by transliteration; the Swift side has not run |
+| Export endpoints | Built and tested | CSV is formula-safe and RFC 4180; JSON is one round-trippable document. Neither has a retention promise: the file is the promise |
 
 ## How to rerun the attack
 
 ```bash
-make verify                       # contracts current, parity, 467 tests
+make verify                       # contracts current, rule fixtures current, 551 tests
 ./.venv/bin/python -m sms_wiz.cli demo
 SMSWIZ_TOKEN=s3cret ./.venv/bin/python -m sms_wiz.cli serve   # then: no token → 401
 ```

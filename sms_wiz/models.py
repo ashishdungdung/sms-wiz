@@ -420,7 +420,7 @@ class Ledger(BaseModel):
 class SmsEvent(BaseModel):
     event_id: str = Field(default_factory=new_id)
     received_at: datetime = Field(default_factory=utcnow)
-    source: Literal["filter", "shortcut", "manual", "import"] = "manual"
+    source: Literal["filter", "shortcut", "manual", "import", "share", "clipboard"] = "manual"
     sender_raw: str = ""
     body: str = ""
     redacted_body: str = ""
@@ -464,7 +464,7 @@ class IngestRequest(BaseModel):
     sender: str
     body: str
     received_at: Optional[datetime] = None
-    source: Literal["filter", "shortcut", "manual", "import"] = "manual"
+    source: Literal["filter", "shortcut", "manual", "import", "share", "clipboard"] = "manual"
 
 
 class IngestResponse(BaseModel):

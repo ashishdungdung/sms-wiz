@@ -14,7 +14,15 @@ contracts/filter_rules.json    ← deterministic artifact, ships in the app
         │
         ├── Python: fast pre-pass for POST /api/v1/filter
         └── Swift:  FilterRules.swift, inside the extension (offline)
+                          │
+        tests/fixtures/filter_rules/cases.json  ← both replay this
 ```
+
+`FilterRules.swift` is **written, not compiled** here (no Swift toolchain); the
+fixtures are what make it reviewable. `scripts/gen_rule_fixtures.py` generates a
+case per rule plus four hand-written edges, the Python suite asserts those
+answers, and `FilterRulesParityTests` asserts the same answers from Swift. A rule
+change without regenerating fails `make verify`.
 
 The Python pre-pass is an optimisation. The full chain still runs on ingest and
 stays authoritative; a rule can pick a folder, never a ledger entry.
@@ -118,6 +126,8 @@ money in it never becomes `promotion` just because an offer rides along.
 
 ```bash
 ./.venv/bin/python -m sms_wiz.cli rules-check          # validate authoring file
+./.venv/bin/python scripts/gen_rule_fixtures.py        # after adding or editing a rule
+make verify                                            # fails if the fixtures are stale
 
 curl -s localhost:8000/api/v1/rules/evaluate -H 'content-type: application/json' \
   -d '{"sender":"AD-HDFCBK-T","body":"Convert your purchase to Easy EMI at 0% interest. Pre-approved for you."}'

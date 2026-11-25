@@ -40,7 +40,7 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 
 ./.venv/bin/python -m sms_wiz.cli demo          # 39 Indian edge cases, end to end
 ./.venv/bin/python -m sms_wiz.cli serve         # API on http://127.0.0.1:8000  (/docs for OpenAPI)
-./.venv/bin/python -m pytest                    # 467 tests
+./.venv/bin/python -m pytest                    # 551 tests
 
 # or, without remembering any of the above:
 make install && make demo && make verify
@@ -171,7 +171,10 @@ textually by `scripts/verify_contracts.py`, but no Xcode build has run here.
 | `GET` | `/api/v1/analytics/travel` | tickets, PNRs, routes, upcoming trips |
 | `GET` | `/api/v1/analytics/bills` | what is due vs what was paid, per category |
 | `GET` | `/api/v1/cleanup-queues` | counts per Apple folder — the honest bulk-delete helper |
-| `GET`/`POST` | `/api/v1/merchants` | self-learning dictionary; `POST` = user correction |
+| `GET`/`POST` | `/api/v1/merchants` | self-learning dictionary; `POST` = user correction, and it renames events already stored (`events_updated`) |
+| `GET` | `/api/v1/merchants/unresolved` | the review queue: merchants the ledger recorded but could not name, with a suggestion |
+| `GET` | `/api/v1/export.csv` | every event as RFC 4180 CSV — formula-safe, opens in any spreadsheet |
+| `GET` | `/api/v1/export.json` | one snapshot: events, refunds, vouchers, balances, alerts, dictionary |
 | `GET` | `/api/v1/apple/capabilities` | the sub-actions to declare (≤5 per group) |
 | `GET` | `/health` | db path, merchant count, whether the LLM is on |
 
@@ -287,8 +290,8 @@ sms_wiz/
 scripts/         export_contracts.py (generate), verify_contracts.py (parity gate)
 contracts/       generated schema + enums, plus fixtures both languages replay
 .agents/skills/  six step-by-step procedures for changes this repo gets
-tests/           467 tests
-ios/             reference Swift (filter extension, App Intent, models)
+tests/           551 tests
+ios/             reference Swift (app, share extension, filter extension, SMSCore)
 docs/            iOS constraints, schema, filter-rule syntax, review findings
 ```
 
@@ -298,17 +301,27 @@ docs/            iOS constraints, schema, filter-rule syntax, review findings
 
 - [x] Multilingual normalisation (digits, currency, phrases) with tests and a fixture.
 - [x] Generated contract + shared fixtures + Swift parity check without Xcode.
-- [ ] Share extension + clipboard import in the iOS app (the reliable paths).
-- [ ] Merchant dictionary review UI backed by `GET/POST /api/v1/merchants`.
+- [x] Share extension + clipboard import in the iOS app — **written, not compiled**
+      (`ios/SMSWiz/ShareViewController.swift`, `ClipboardImportView.swift`).
+- [x] Merchant dictionary review UI backed by `GET/POST /api/v1/merchants`, plus a
+      server-side queue (`GET /api/v1/merchants/unresolved`) and corrections that
+      rename events already stored.
 - [x] Subscription calendar from pre-debit notices, with conservative cadence.
 - [x] Lender-authored rule syntax for the filter extension's offline pass (34 rules).
 - [x] Merchant dictionary as data: 753 keys over 333 brands, unknown matches flagged.
 - [x] Per-bank message templates with a real-message fixture corpus.
 - [x] Weekly / monthly / UPI / card-payment analytics with one month definition.
 - [x] Notification policy: what earns a push, what waits for the weekly digest.
-- [ ] Swift `FilterRules.swift` evaluator (spec + compiled JSON exist; not yet compiled).
-- [ ] Share extension + clipboard import inside a real iOS app.
-- [ ] Export to CSV / a single JSON snapshot, so the ledger is never hostage.
+- [x] Swift `FilterRules.swift` evaluator — **written, not compiled**; its parity
+      with the Python fast path is pinned by `tests/fixtures/filter_rules/cases.json`
+      and `FilterRulesParityTests`.
+- [ ] Share extension + clipboard import inside a *real* app target in Xcode
+      (the code and the Info.plist are here; the target is yours to create).
+- [x] Export to CSV / a single JSON snapshot (`GET /api/v1/export.csv`,
+      `GET /api/v1/export.json`, `sms-wiz export`), so the ledger is never hostage.
 - [x] Demat, travel and bill domains: trades, SIP allotments, dividends, IPOs,
       corporate actions, tickets, hotels, carrier and utility bills.
-- [ ] More bank templates, with real messages as test fixtures (redacted).
+- [x] More bank templates, with real messages as test fixtures (redacted):
+      nine new templates over eight institutions that had no shape of their own
+      — Bank of India, Central Bank of India, Citibank, DBS, DCB, City Union,
+      Bank of Maharashtra, American Express — 69 templates in total.

@@ -39,12 +39,14 @@ demo: ## 14 Indian edge cases, end to end (deterministic, no network)
 serve: ## FastAPI on 127.0.0.1:$(PORT) — landing page at /  (use HOST=0.0.0.0 to expose)
 	$(PY) -m sms_wiz.cli serve --host $(HOST) --port $(PORT)
 
-contracts: ## Regenerate contracts/ from sms_wiz/models.py
+contracts: ## Regenerate contracts/ and the filter-rule fixtures
 	$(PY) scripts/export_contracts.py
+	$(PY) scripts/gen_rule_fixtures.py
 
-verify: ## Fail on stale contracts, Python/Swift drift, or failing tests
+verify: ## Fail on stale contracts, stale rule fixtures, Python/Swift drift, or failing tests
 	$(PY) scripts/export_contracts.py --check
 	$(PY) scripts/verify_contracts.py
+	$(PY) scripts/gen_rule_fixtures.py --check
 	$(PY) -m pytest
 
 swift-test: ## Run SMSCore tests on a Mac/Linux with Swift installed
