@@ -79,8 +79,11 @@ final class ContractsParityTests: XCTestCase {
         XCTAssertLessThanOrEqual(AppleSubAction.declaredPromotional.count, 5)
         XCTAssertTrue(AppleSubAction.declaredTransactional.allSatisfy { $0.rawValue.hasPrefix("transactional") })
         XCTAssertTrue(AppleSubAction.declaredPromotional.allSatisfy { $0.rawValue.hasPrefix("promotional") })
-        for subAction in AppleSubAction.allCases where subAction != .none {
-            XCTAssertTrue(subAction.isDeclared, "\(subAction.rawValue) would be dropped by iOS")
+        for subAction in AppleSubAction.declaredTransactional + AppleSubAction.declaredPromotional {
+            XCTAssertTrue(subAction.isDeclared, "\(subAction.rawValue) should be declared")
+        }
+        for undeclared: AppleSubAction in [.transactionalOthers, .transactionalHealth, .transactionalWeather, .transactionalCarrier] {
+            XCTAssertFalse(undeclared.isDeclared, "\(undeclared.rawValue) is intentionally undeclared (Apple 5-per-group cap)")
         }
     }
 

@@ -31,10 +31,7 @@ public struct IngestResult: Decodable, Sendable, Equatable {
     public let alerts: [IngestAlertInfo]
 
     enum CodingKeys: String, CodingKey {
-        case eventID = "event_id"
-        case summary
-        case intent
-        case needsReview = "needs_review"
+        case event
         case duplicateOf = "duplicate_of"
         case alerts
     }

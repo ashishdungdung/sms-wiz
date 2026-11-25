@@ -57,11 +57,7 @@ public enum PasteParser {
 
     /// `AD-HDFCBK-T`, `VM-HDFCBK`, `SBICRD-T`, `HDFCBK-S`.
     static func isDLTHeader(_ token: String) -> Bool {
-        let parts = token.split(separator: "-", omittingEmptySubsequences: false)
-        guard (2...3).contains(parts.count) else { return false }
-        return parts.allSatisfy { part in
-            (3...10).contains(part.count) && part.allSatisfy { $0.isLetter || $0.isNumber }
-        }
+        token.contains("-") && SenderKind.isDLTShaped(token.uppercased())
     }
 
     /// `57575`, `5600010` — operator short codes. Five or more digits, so a
@@ -139,7 +135,7 @@ public enum PasteParser {
             // A four-digit short code ("1909: OTP 123456") is a header only with
             // an explicit separator: "2026 was a good year" is prose, and both
             // are four digits.
-            let token = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? ""
+            let token = line.split(whereSeparator: { $0 == " " || $0 == ":" || $0 == "\t" }).first.map(String.init) ?? ""
             let digits = token.replacingOccurrences(of: ":", with: "")
             if (3...6).contains(digits.count), digits.allSatisfy(\.isNumber), line.hasPrefix(digits + ":") {
                 let body = line.dropFirst(digits.count + 1).trimmingCharacters(in: .whitespaces)
@@ -147,7 +143,7 @@ public enum PasteParser {
             }
             return nil
         }
-        let token = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? ""
+        let token = line.split(whereSeparator: { $0 == " " || $0 == ":" || $0 == "\t" }).first.map(String.init) ?? ""
         let rest = line.dropFirst(token.count).trimmingCharacters(in: .whitespaces)
         if rest.isEmpty { return (sender, nil) }
         if rest.hasPrefix(":") || rest.hasPrefix("-") {
