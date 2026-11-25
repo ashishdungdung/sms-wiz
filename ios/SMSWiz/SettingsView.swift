@@ -98,7 +98,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("Version \(Bundle.main.infoDictionary?[\"CFBundleShortVersionString\"] as? String ?? "dev")")
+                    Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

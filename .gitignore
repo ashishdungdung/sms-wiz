@@ -12,3 +12,5 @@ htmlcov/
 *.xcuserstate
 DerivedData/
 *.egg-info/
+.build/
+ios/SMSWiz.xcodeproj/

@@ -1,0 +1,11 @@
+{
+  "name": "sms-wiz-filter-edge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/filter.test.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}

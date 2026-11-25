@@ -29,11 +29,20 @@ struct SMSWizApp: App {
                 LedgerView()
                     .tabItem { Label("Ledger", systemImage: "indianrupeesign.circle") }
 
+                UpcomingView()
+                    .tabItem { Label("Upcoming", systemImage: "calendar.badge.clock") }
+
+                VaultView()
+                    .tabItem { Label("Vault", systemImage: "lock.doc") }
+
                 ClipboardImportView()
                     .tabItem { Label("Import", systemImage: "doc.on.clipboard") }
 
                 MerchantReviewView()
                     .tabItem { Label("Merchants", systemImage: "building.2") }
+
+                ComplaintView()
+                    .tabItem { Label("Report", systemImage: "exclamationmark.shield") }
 
                 SettingsView()
                     .tabItem { Label("Settings", systemImage: "gearshape") }

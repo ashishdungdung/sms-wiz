@@ -1,0 +1,9 @@
+name = "sms-wiz-filter-edge"
+main = "src/index.ts"
+compatibility_date = "2025-11-01"
+
+[vars]
+# Override with `wrangler secret put SMSWIZ_TOKEN` in production.
+# When unset or empty, /api/v1/filter accepts unauthenticated Apple deferrals.
+APPLE_TEAM_ID = "TEAMID1234"
+BUNDLE_ID = "com.example.smswiz.MessageFilterExtension"
