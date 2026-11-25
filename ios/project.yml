@@ -19,8 +19,6 @@ targets:
           - ShareViewController.swift
           - Info.plist
           - SMSWiz.entitlements
-    info:
-      path: SMSWiz/Info.plist
     entitlements:
       path: SMSWiz/SMSWiz.entitlements
     dependencies:
@@ -29,6 +27,7 @@ targets:
       - target: ShareExtension
     settings:
       base:
+        INFOPLIST_FILE: SMSWiz/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.example.smswiz
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "1.0"
@@ -46,8 +45,6 @@ targets:
         buildPhase: resources
       - path: ../contracts/sender_kinds.json
         buildPhase: resources
-    info:
-      path: MessageFilterExtension/Info.plist
     entitlements:
       path: MessageFilterExtension/MessageFilterExtension.entitlements
     dependencies:
@@ -55,6 +52,7 @@ targets:
       - sdk: IdentityLookup.framework
     settings:
       base:
+        INFOPLIST_FILE: MessageFilterExtension/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.example.smswiz.MessageFilterExtension
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "1.0"
@@ -65,14 +63,13 @@ targets:
     platform: iOS
     sources:
       - path: SMSWiz/ShareViewController.swift
-    info:
-      path: ShareExtension/Info.plist
     entitlements:
       path: ShareExtension/ShareExtension.entitlements
     dependencies:
       - package: SMSCore
     settings:
       base:
+        INFOPLIST_FILE: ShareExtension/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.example.smswiz.ShareExtension
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "1.0"
