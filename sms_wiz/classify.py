@@ -59,7 +59,7 @@ CC_BILL_PATTERNS = (
     # Paying the card *from* the bank account: "Rs 18,450 debited from A/c
     # XX4092 to Credit Card XX4433". The debit is real, the spend already
     # happened on the card, so counting both would double it.
-    r"\b(?:to|towards)\s+(?:your\s+)?(?:credit\s+card|card\s+(?:ending|no\.?|xx)|cc\s*(?:a/c|ac|payment))\b",
+    r"\b(?:to|towards)\s+(?:your\s+|(?:[a-z]+\s+){0,2})?(?:credit\s+card|card\s+(?:ending|no\.?|xx)|cc\s*(?:a/c|ac|payment))\b",
     r"\b(?:cc|card)\s+payment\b",
 )
 
@@ -94,6 +94,7 @@ LOGISTICS_PATTERNS = (
     r"\bchart\s+prepared\b",
     r"\b(?:pnr|coach|berth|boarding|train\s+no|flight\s+no)\b",
     r"\b(?:awb|docket)\b",
+    r"\b(?:delay\s+in\s+your\s+order|new\s+delivery\s+date)\b",
 )
 #: Travel is a *booking record*. The money arrives as its own bank debit, so a
 #: ticket must never be counted a second time — it carries an itinerary instead.
@@ -154,6 +155,7 @@ UPCOMING_DEBIT_PATTERNS = (
     r"\b(?:e-?mandate|mandate|nach|auto\s*pay|autopay|standing\s+instruction)\b",
     r"\b(?:is|are)\s+(?:scheduled|due)\s+to\s+be\s+debited\b",
     r"\bpre-?debit\s+(?:notice|alert|intimation)\b",
+    r"\binstallment\b.{0,60}\b(?:due|payable)\b",
 )
 BILL_DUE_PATTERNS = (
     r"\b(?:bill|statement)\b.{0,60}\b(?:due|generated|outstanding|payable)\b",
@@ -218,7 +220,7 @@ UPSELL_PATTERNS = (
     r"\bpre-?approved\b",
     r"\b(?:personal|home|business|gold)\s+loan\b",
     r"\b(?:instant\s+)?loan\s+(?:of|up\s+to|offer)\b",
-    r"\bconvert\b.{0,40}\bemi\b",
+    r"\bconvert(?:ing)?\b.{0,60}\bemi\b",
     r"\beasy\s*emi\b",
     r"\bemi\s+(?:option|available|on\s+your)\b",
     r"\bcredit\s+limit\s+(?:increase|enhancement|upgrade)\b",
@@ -568,6 +570,11 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
     if gov:
         evidence.append(f"government/utility language ({gov.strip()})")
         return Intent.GOVT_NOTICE, 0.72, evidence, flags
+
+    # 13.2 Health / hospital appointments ----------------------------------
+    if re.search(r"\bappointment\b.{0,60}(?:\bdr\.|\b(?:doctor|hospital|clinic|counter)\b)", lower):
+        evidence.append("medical appointment notice")
+        return Intent.HEALTH, 0.82, evidence, flags
 
     # 13.5 Telecom recharge ------------------------------------------------
     if (

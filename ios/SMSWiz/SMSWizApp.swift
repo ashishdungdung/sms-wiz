@@ -60,6 +60,7 @@ struct SMSWizApp: App {
 @MainActor
 final class AppStore: ObservableObject {
     @Published var month: Overview?
+    @Published var recentEvents: [EventSummaryItem] = []
     @Published var unresolved: [UnresolvedMerchant] = []
     @Published var queued: Int = AppConfig.pendingMessages().count
     @Published var lastError: String?
@@ -79,6 +80,7 @@ final class AppStore: ObservableObject {
         defer { busy = false }
         do {
             month = try await client.overview()
+            recentEvents = (try? await client.events(limit: 25)) ?? []
             lastError = nil
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)

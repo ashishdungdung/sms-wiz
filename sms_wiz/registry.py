@@ -105,7 +105,9 @@ ENTITIES: tuple[Entity, ...] = (
     _bank("FINCRE", "Fincare Small Finance Bank", ("fincarebank.com",), ("FINCARE",)),
     # --- PSU banks -----------------------------------------------------------
     _bank("SBIN", "State Bank of India", ("onlinesbi.sbi", "sbi.co.in", "onlinesbi.com"), ("SBI",)),
+    _bank("SBIUPI", "State Bank of India", ("onlinesbi.sbi", "sbi.co.in", "onlinesbi.com"), ("SBI",)),
     _bank("SBICRD", "SBI Card", ("sbicard.com", "onlinesbi.sbi"), ("SBI CARD", "SBI CREDIT CARD")),
+    _bank("UNIONB", "Union Bank of India", ("unionbankofindia.co.in",), ("UNION BANK",)),
     # --- Insurers and NBFCs (they send premium/EMI mail from their own DLT IDs)
     _brand("LICIND", "LIC", ("licindia.in",), ("LIC", "LIFE INSURANCE CORPORATION")),
     _brand("LICOFI", "LIC", ("licindia.in",), ("LIC OF INDIA",)),
@@ -293,6 +295,7 @@ ENTITIES: tuple[Entity, ...] = (
     _brand("DTDCIN", "DTDC", ("dtdc.in",), ("DTDC",)),
     _brand("1MG", "Tata 1mg", ("1mg.com",), ("1MG", "TATA 1MG")),
     _brand("APOLLO", "Apollo Pharmacy", ("apollopharmacy.in", "apollohospitals.com"), ("APOLLO",)),
+    _brand("APOHOS", "Apollo Hospitals", ("apollohospitals.com",), ("APOLLO HOSPITAL", "APOLLO")),
     _brand("PHTMEZ", "PharmEasy", ("pharmeasy.in",), ("PHARMEASY",)),
     _brand("LALPT", "Dr Lal PathLabs", ("lalpathlabs.com",), ("LAL PATHLABS", "DR LAL")),
     _brand("METROP", "Metropolis", ("metropolisindia.com",), ("METROPOLIS",)),

@@ -60,6 +60,31 @@ struct LedgerView: View {
                             }
                         }
                     }
+
+                    if !store.recentEvents.isEmpty {
+                        Section("Recent events (tap for evidence)") {
+                            ForEach(store.recentEvents.prefix(15)) { ev in
+                                NavigationLink {
+                                    EventDetailView(event: ev)
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(ev.summary.isEmpty ? ev.intent : ev.summary)
+                                                .lineLimit(1)
+                                            Text("\(ev.intent) · \(ev.countsTowardSpend ? "counted" : "excluded")")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if let amt = ev.amountValue {
+                                            Text("₹\(Int(amt))")
+                                                .font(.subheadline.monospacedDigit())
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else if store.busy {
                     ProgressView("Loading the month…")
                 } else {

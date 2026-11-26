@@ -91,6 +91,26 @@ struct IngestSMSIntent: AppIntent {
 // is the server" is how an extension ends up posting to a stale address after
 // the user changes it in Settings. Import SMSCore and use `AppConfig.load()`.
 
+struct MonthSpendIntent: AppIntent {
+    static var title: LocalizedStringResource = "SMS Wiz spend this month"
+    static var description = IntentDescription(
+        "Reads this month's counted spend, excluded transfers, and income from SMS Wiz."
+    )
+    static var openAppWhenRun: Bool = false
+
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        do {
+            let overview = try await APIClient().overview()
+            let m = overview.month
+            return .result(
+                value: "Spent ₹\(Int(m.spend)), Excluded ₹\(Int(m.excluded)), Income ₹\(Int(m.income)) (\(m.count) counted)."
+            )
+        } catch {
+            return .result(value: (error as? LocalizedError)?.errorDescription ?? "SMS Wiz: server unreachable")
+        }
+    }
+}
+
 struct ShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -98,6 +118,12 @@ struct ShortcutsProvider: AppShortcutsProvider {
             phrases: ["File this SMS with \(.applicationName)"],
             shortTitle: "File SMS",
             systemImageName: "message.badge"
+        )
+        AppShortcut(
+            intent: MonthSpendIntent(),
+            phrases: ["\(.applicationName) spend this month"],
+            shortTitle: "Spend This Month",
+            systemImageName: "indianrupeesign.circle"
         )
     }
 }

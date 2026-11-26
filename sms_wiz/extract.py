@@ -705,6 +705,9 @@ def find_merchant_raw(text: str) -> Optional[str]:
         candidate = " ".join(words).strip()
         if len(candidate) < 3:
             continue
+        # Account masks ("x4572 to ASH ICI x6174", "Axis XX5322") are accounts, not merchants.
+        if re.search(r"\b(?:x{1,2}|\*{2,})\d{3,4}\b", candidate, re.IGNORECASE):
+            continue
         if candidate.upper().startswith("VPA") or "@" in candidate:
             return candidate
         if any(ch.isalpha() for ch in candidate):

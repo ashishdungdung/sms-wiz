@@ -133,6 +133,78 @@ public struct AlertItem: Decodable, Sendable, Identifiable, Equatable {
     }
 }
 
+public struct EventSummaryItem: Decodable, Sendable, Identifiable, Equatable {
+    public let eventID: String
+    public let intent: String
+    public let amountValue: Double?
+    public let institution: String?
+    public let merchantRaw: String?
+    public let merchantClean: String?
+    public let ledgerTreatment: String
+    public let countsTowardSpend: Bool
+    public let appleAction: String
+    public let appleSubaction: String
+    public let retention: String
+    public let confidence: Double
+    public let needsReview: Bool
+    public let dedupStatus: String
+    public let summary: String
+    public let evidence: [String]
+
+    public var id: String { eventID }
+
+    enum CodingKeys: String, CodingKey {
+        case intent, institution, retention, confidence, payload, body
+        case eventID = "event_id"
+        case amountValue = "amount_value"
+        case merchantRaw = "merchant_raw"
+        case merchantClean = "merchant_clean"
+        case ledgerTreatment = "ledger_treatment"
+        case countsTowardSpend = "counts_toward_spend"
+        case appleAction = "apple_action"
+        case appleSubaction = "apple_subaction"
+        case needsReview = "needs_review"
+        case dedupStatus = "dedup_status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        eventID = try c.decode(String.self, forKey: .eventID)
+        intent = try c.decode(String.self, forKey: .intent)
+        amountValue = try c.decodeIfPresent(Double.self, forKey: .amountValue)
+        institution = try c.decodeIfPresent(String.self, forKey: .institution)
+        merchantRaw = try c.decodeIfPresent(String.self, forKey: .merchantRaw)
+        merchantClean = try c.decodeIfPresent(String.self, forKey: .merchantClean)
+        ledgerTreatment = (try? c.decode(String.self, forKey: .ledgerTreatment)) ?? "none"
+        if let flag = try? c.decode(Bool.self, forKey: .countsTowardSpend) {
+            countsTowardSpend = flag
+        } else {
+            countsTowardSpend = ((try? c.decode(Int.self, forKey: .countsTowardSpend)) ?? 0) != 0
+        }
+        appleAction = (try? c.decode(String.self, forKey: .appleAction)) ?? "allow"
+        appleSubaction = (try? c.decode(String.self, forKey: .appleSubaction)) ?? "none"
+        retention = (try? c.decode(String.self, forKey: .retention)) ?? "review"
+        confidence = (try? c.decode(Double.self, forKey: .confidence)) ?? 0
+        if let nr = try? c.decode(Bool.self, forKey: .needsReview) {
+            needsReview = nr
+        } else {
+            needsReview = ((try? c.decode(Int.self, forKey: .needsReview)) ?? 0) != 0
+        }
+        dedupStatus = (try? c.decode(String.self, forKey: .dedupStatus)) ?? "unique"
+
+        var parsedSummary = (try? c.decodeIfPresent(String.self, forKey: .body)) ?? ""
+        var parsedEvidence: [String] = []
+        if let rawPayload = try? c.decodeIfPresent(String.self, forKey: .payload),
+           let data = rawPayload.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let s = obj["summary"] as? String, !s.isEmpty { parsedSummary = s }
+            if let ev = obj["evidence"] as? [String] { parsedEvidence = ev }
+        }
+        summary = parsedSummary
+        evidence = parsedEvidence
+    }
+}
+
 public extension APIClient {
     func vouchers() async throws -> [VoucherItem] {
         try await fetchJSON(path: "/api/v1/vouchers")
@@ -157,6 +229,13 @@ public extension APIClient {
     func alerts(limit: Int = 50) async throws -> [AlertItem] {
         try await fetchJSON(
             path: "/api/v1/alerts",
+            query: [URLQueryItem(name: "limit", value: String(limit))]
+        )
+    }
+
+    func events(limit: Int = 30) async throws -> [EventSummaryItem] {
+        try await fetchJSON(
+            path: "/api/v1/events",
             query: [URLQueryItem(name: "limit", value: String(limit))]
         )
     }

@@ -447,3 +447,41 @@ class TestUnseenMessageProbe:
         )
         assert event.intent is Intent.BANK_UPSELL
         assert event.ledger.counts_toward_spend is False
+
+    def test_sbi_upi_cheq_cc_payment_and_union_loan_due_and_apollo(self, merchants):
+        cc = classify(
+            "Dear UPI user A/C X4572 debited by 1000.00 on date 27Oct26 trf to CheQ Credit Card Refno 123456789012",
+            "SBIUPI-S",
+            merchants,
+        )
+        assert cc.intent is Intent.CC_BILL_PAYMENT
+        assert cc.ledger.counts_toward_spend is False
+
+        loan = classify(
+            "Installment in Loan A/c 655****7 is due on 31-10-2026. Plz pay before due date.",
+            "UNIONB-S",
+            merchants,
+        )
+        assert loan.intent is Intent.UPCOMING_DEBIT
+
+        hosp = classify(
+            "Namaste! Your Appointment is confirmed with Dr. Abhijit Samal at Apollo Super Speciality Hospital",
+            "APOHOS-S",
+            merchants,
+        )
+        assert hosp.intent is Intent.HEALTH
+
+        delay = classify(
+            "There's a slight delay in your order id 12345. The new delivery date is 8 November.",
+            "MYNTRA-S",
+            merchants,
+        )
+        assert delay.intent is Intent.LOGISTICS
+
+        otp = classify(
+            "OTP is 482917 for fund transfer of Rs.5,748.00 from Ac x4572 to ASH ICI Ac x6174.",
+            "SBYONO-S",
+            merchants,
+        )
+        assert otp.intent is Intent.OTP
+        assert otp.merchant is None or otp.merchant.raw is None
