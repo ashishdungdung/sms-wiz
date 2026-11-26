@@ -745,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "digest":
-            connection = connect(_db_path(args.db) if args.db else None)
+            connection = connect(_db_path(args.db))
             try:
                 stored = list_alerts(connection, limit=500)
             finally:

@@ -402,3 +402,48 @@ class TestUnseenMessageProbe:
         )
         assert event.intent is Intent.EXPENSE
         assert "embedded_upsell" in event.flags
+
+    def test_icicit_debit_and_emi_are_not_phishing(self, merchants):
+        debit = classify(
+            "ICICI Bank Acc XX104 debited Rs. 41,700.00 on 02-Nov-26 "
+            "InfoBIL*INFT*FK26.Avl Bal Rs. 21,866.30.",
+            "ICICIT-S",
+            merchants,
+        )
+        assert debit.intent is Intent.EXPENSE
+        assert debit.institution is not None and debit.institution.name == "ICICI Bank"
+
+        emi = classify(
+            "EMI of Rs 21826 for ICICI Bank Personal Loan XX7052 is due on 05-Nov-26.",
+            "ICICIT-S",
+            merchants,
+        )
+        assert emi.intent is Intent.BILL_DUE
+
+    def test_idfc_estatement_shortlink_is_not_phishing(self, merchants):
+        event = classify(
+            "The eStatement for your FIRST Select Credit Card XX2735 is here "
+            "https://idfcfr.in/IDFCFB/jchDoV To access eStatement use your date of birth",
+            "IDFCFB-S",
+            merchants,
+        )
+        assert event.intent is not Intent.PHISHING_SUSPECT
+
+    def test_axis_credit_card_payment_received_is_cc_bill_payment(self, merchants):
+        event = classify(
+            "Payment of INR 10000 has been received towards your Axis Bank Credit Card XX5322 on 29-10-26 - Axis Bank",
+            "AXISBK-S",
+            merchants,
+        )
+        assert event.intent is Intent.CC_BILL_PAYMENT
+        assert event.ledger.counts_toward_spend is False
+
+    def test_yesbank_disbursal_consent_is_bank_upsell(self, merchants):
+        event = classify(
+            "Funds ready for Disbursal Please verify the disbursal of INR 86,000.00 "
+            "to your YES BANK Credit Card 5853. Proceed: ccybl.in/YESBNK/MkbJpYYrw",
+            "YESBNK-S",
+            merchants,
+        )
+        assert event.intent is Intent.BANK_UPSELL
+        assert event.ledger.counts_toward_spend is False

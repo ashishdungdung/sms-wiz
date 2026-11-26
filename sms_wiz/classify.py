@@ -51,7 +51,7 @@ CC_BILL_PATTERNS = (
     r"\bpayment\s+received\b.{0,60}\b(?:card|credit\s+card)\b",
     r"\bthank\s+you\s+for\s+(?:your\s+)?payment\b",
     r"\b(?:credit\s+card|cc)\s+bill\s+(?:payment|paid|received|successful)",
-    r"\bpayment\s+(?:of|towards)\b.{0,50}\b(?:credit\s+card|card\s+(?:ending|no|xx)|cc\b)",
+    r"\bpayment\s+(?:of|towards)\b.{0,80}\b(?:credit\s+card|card\s+(?:ending|no|xx)|cc\b)",
     r"\bbill\s+(?:payment|pay)\b.{0,40}\b(?:card|cc)\b",
     r"\bcredited\s+to\s+your\s+(?:credit\s+)?card\b",
     r"\bcard\s+payment\s+(?:received|successful|of|done)\b",
@@ -160,9 +160,10 @@ BILL_DUE_PATTERNS = (
     r"\b(?:total|minimum)\s+(?:amount\s+)?due\b",
     r"\bdue\s+date\b",
     r"\bpayment\s+due\b",
-    # LIC / insurance renewals: "Premium of Rs 15,340 is due on 28-03-25".
+    # LIC / insurance renewals & loan EMIs: "Premium of Rs 15,340 is due on 28-03-25".
     # The `due` requirement keeps "premium debited from a/c" in the ledger.
     r"\bpremium\b.{0,50}\b(?:due|payable)\b",
+    r"\bemi\b.{0,80}\b(?:due|payable)\b",
 )
 
 #: Words that prove money actually moved. An offer can mention "credit" or
@@ -225,6 +226,7 @@ UPSELL_PATTERNS = (
     r"\b(?:insurance|term)\s+plan\b",
     r"\bapply\s+now\b",
     r"\b(?:avail|get)\s+(?:a\s+)?(?:loan|limit\s+increase)\b",
+    r"\b(?:funds\s+ready\s+for\s+disbursal|require\s+consent\s+to\s+continue\s+disbursement)\b",
 )
 PROMO_PATTERNS = (
     r"\b(?:offer|discount|deal|sale|cashback|coupon|voucher)\b",
