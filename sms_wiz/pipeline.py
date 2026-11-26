@@ -492,7 +492,7 @@ def reclassify_stored(conn: object, merchants: MerchantDictionary) -> dict[str, 
         )
         if (
             new_event.intent.value != row["intent"]
-            or (new_event.merchant and new_event.merchant.clean != payload.get("merchant", {}).get("clean"))
+            or (new_event.merchant and new_event.merchant.clean != (payload.get("merchant") or {}).get("clean"))
         ):
             updated += 1
         store.save_event(conn, new_event)
