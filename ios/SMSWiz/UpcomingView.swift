@@ -5,6 +5,9 @@ import SMSCore
 struct UpcomingView: View {
     @State private var subs: SubscriptionsSummary?
     @State private var cards: CardsSummary?
+    @State private var loans: LoansSummary?
+    @State private var investments: InvestmentsBook?
+    @State private var travel: TravelLog?
     @State private var alerts: [AlertItem] = []
     @State private var errorText: String?
     @State private var busy = false
@@ -70,6 +73,75 @@ struct UpcomingView: View {
                     }
                 }
 
+                if let loans, !loans.loans.isEmpty {
+                    Section("Loans & EMIs") {
+                        ForEach(loans.loans) { loan in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(loan.institution) · \(loan.accountLast4)")
+                                        .font(.headline)
+                                    Text(loan.dueDate ?? "EMI tracked")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if let emi = loan.emiAmount {
+                                    Text("₹\(Int(emi))")
+                                        .font(.subheadline.monospacedDigit())
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let investments, (!investments.holdings.isEmpty || investments.sipTotal > 0 || investments.dividendTotal > 0) {
+                    Section("Investments") {
+                        if investments.sipTotal > 0 || investments.dividendTotal > 0 {
+                            HStack {
+                                Text("SIPs ₹\(Int(investments.sipTotal))")
+                                Spacer()
+                                Text("Dividends ₹\(Int(investments.dividendTotal))")
+                                    .foregroundStyle(.green)
+                            }
+                            .font(.subheadline.monospacedDigit())
+                        }
+                        ForEach(investments.holdings) { h in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(h.security).font(.subheadline.bold()).lineLimit(1)
+                                    Text("\(String(format: "%.3f", h.netQuantity)) units")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("₹\(Int(h.buyValue))")
+                                    .font(.subheadline.monospacedDigit())
+                            }
+                        }
+                    }
+                }
+
+                if let travel, !travel.trips.isEmpty {
+                    Section("Travel") {
+                        ForEach(travel.trips) { trip in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(trip.route ?? trip.provider ?? trip.mode.capitalized)
+                                        .font(.headline)
+                                    Text("\(trip.mode.capitalized)\(trip.pnr.map { " · PNR \($0)" } ?? "")")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if let fare = trip.fare {
+                                    Text("₹\(Int(fare))")
+                                        .font(.subheadline.monospacedDigit())
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Section("Alerts") {
                     if alerts.isEmpty {
                         Text("No alerts.").foregroundStyle(.secondary)
@@ -105,9 +177,15 @@ struct UpcomingView: View {
         do {
             async let s = client.subscriptions()
             async let c = client.cards()
+            async let l = client.loans()
+            async let inv = client.investments()
+            async let tr = client.travel()
             async let a = client.alerts(limit: 30)
             subs = try await s
             cards = try await c
+            loans = try? await l
+            investments = try? await inv
+            travel = try? await tr
             alerts = try await a
             errorText = nil
         } catch {

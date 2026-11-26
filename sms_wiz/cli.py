@@ -607,6 +607,9 @@ def main(argv: list[str] | None = None) -> int:
     export_cmd.add_argument("--month", default=None, help="only this month, YYYY-MM")
     export_cmd.add_argument("--db", default=None)
 
+    reclassify_cmd = sub.add_parser("reclassify", help="re-run updated rules on stored events")
+    reclassify_cmd.add_argument("--db", default=None)
+
     args = parser.parse_args(argv)
 
     if args.command == "demo":
@@ -755,6 +758,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{item.severity:8}] {item.channel:6} {item.kind:24} {item.title}")
             print("\n" + notify.digest(planned)["headline"])
             return 0
+
+    if args.command == "reclassify":
+        from .pipeline import reclassify_stored
+
+        db_file = _db_path(args.db)
+        connection = connect(db_file)
+        try:
+            result = reclassify_stored(connection, MerchantDictionary(db_file))
+        finally:
+            connection.close()
+        print(f"processed={result['processed']} updated={result['updated']} unchanged={result['unchanged']}")
+        return 0
 
     parser.print_help()
     return 1

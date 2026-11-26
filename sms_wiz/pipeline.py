@@ -455,3 +455,46 @@ class Ingestor:
                     message="Could not classify this message confidently. Kept in the inbox and queued for review.",
                 )
             )
+
+
+def reclassify_stored(conn: object, merchants: MerchantDictionary) -> dict[str, int]:
+    """Re-run the deterministic classifier over all stored events in `conn`.
+
+    Preserves `event_id`, `received_at`, `dedup_status`, and `duplicate_of`,
+    and skips already-redacted OTP messages so masked `<otp>` tokens are not
+    downgraded to `unknown`.
+    """
+    import json
+    from .models import DedupInfo
+
+    rows = conn.execute(
+        "SELECT event_id, received_at, sender_raw, body, intent, dedup_status, duplicate_of, payload FROM events"
+    ).fetchall()
+    updated = 0
+    for row in rows:
+        body = row["body"] or ""
+        try:
+            payload = json.loads(row["payload"])
+        except Exception:
+            payload = {}
+        if payload.get("body_redacted") or ("<otp>" in body and row["intent"] == Intent.OTP.value):
+            continue
+        recv = datetime.fromisoformat(row["received_at"])
+        source = payload.get("source", "import")
+        new_event = analyse(body, row["sender_raw"] or "", merchants=merchants, source=source)
+        new_event.received_at = recv
+        new_event = _apply_stated_date(new_event, recv)
+        new_event.event_id = row["event_id"]
+        new_event.dedup = DedupInfo(
+            status=row["dedup_status"],
+            duplicate_of=row["duplicate_of"],
+            reason=payload.get("dedup", {}).get("reason", ""),
+        )
+        if (
+            new_event.intent.value != row["intent"]
+            or (new_event.merchant and new_event.merchant.clean != payload.get("merchant", {}).get("clean"))
+        ):
+            updated += 1
+        store.save_event(conn, new_event)
+    conn.commit()
+    return {"processed": len(rows), "updated": updated, "unchanged": len(rows) - updated}

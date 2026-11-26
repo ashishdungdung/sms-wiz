@@ -522,6 +522,23 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         """Due notices and paid utilities, kept apart from the spend total."""
         return analytics.bill_calendar(_rows())
 
+    @app.get("/api/v1/analytics/loans")
+    def analytics_loans() -> dict[str, Any]:
+        """Loan EMI reminders and debits grouped by loan account."""
+        return analytics.loan_summary(_rows())
+
+    @app.post("/api/v1/reclassify")
+    def reclassify_events(x_sms_wiz_token: Optional[str] = Header(default=None, alias="X-SMSWiz-Token")) -> dict[str, int]:
+        """Re-run deterministic classification on stored events after rule updates."""
+        _check_token(x_sms_wiz_token)
+        from .pipeline import reclassify_stored
+
+        c = conn()
+        try:
+            return reclassify_stored(c, merchants)
+        finally:
+            c.close()
+
     @app.get("/api/v1/subscriptions")
     def subscription_list() -> dict[str, Any]:
         rows = _rows()

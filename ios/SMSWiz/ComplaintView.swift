@@ -10,10 +10,15 @@ struct ComplaintView: View {
     }
 
     @State private var ground: Ground = .ucc1909
-    @State private var sender = ""
+    @State private var sender: String
     @State private var receivedDate = Date()
-    @State private var messageBody = ""
+    @State private var messageBody: String
     @State private var copied = false
+
+    init(initialSender: String = "", initialBody: String = "") {
+        _sender = State(initialValue: initialSender)
+        _messageBody = State(initialValue: initialBody)
+    }
 
     private var draftText: String {
         let formatter = DateFormatter()

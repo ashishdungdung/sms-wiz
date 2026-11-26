@@ -120,5 +120,34 @@ public struct AppConfig: Sendable, Equatable {
         static let baseURL = "serverBaseURL"
         static let token = "serverToken"
         static let pending = "pendingImports.v2"
+        static let blockedSenders = "blockedSenders"
+        static let junkKeywords = "junkKeywords"
+        static let promoKeywords = "promoKeywords"
+    }
+
+    // MARK: - Offline Filter Rules (read by MessageFilterExtension)
+
+    public static func blockedSenders() -> [String] {
+        store()?.stringArray(forKey: Keys.blockedSenders) ?? []
+    }
+
+    public static func setBlockedSenders(_ values: [String]) {
+        store()?.set(values, forKey: Keys.blockedSenders)
+    }
+
+    public static func junkKeywords() -> [String] {
+        store()?.stringArray(forKey: Keys.junkKeywords) ?? []
+    }
+
+    public static func setJunkKeywords(_ values: [String]) {
+        store()?.set(values, forKey: Keys.junkKeywords)
+    }
+
+    public static func promoKeywords() -> [String] {
+        store()?.stringArray(forKey: Keys.promoKeywords) ?? []
+    }
+
+    public static func setPromoKeywords(_ values: [String]) {
+        store()?.set(values, forKey: Keys.promoKeywords)
     }
 }

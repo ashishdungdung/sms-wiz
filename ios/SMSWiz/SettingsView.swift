@@ -64,6 +64,20 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink("Offline Filter Rules") {
+                        FilterRulesSettingsView()
+                    }
+                    Button {
+                        Task { await reclassifyAll() }
+                    } label: {
+                        Label("Re-run Classification Rules", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(busy)
+                } header: {
+                    Text("Rules & Cleanup")
+                }
+
+                Section {
                     Button {
                         Task { await export("csv") }
                     } label: {
@@ -134,6 +148,92 @@ struct SettingsView: View {
             message = "\(filename) — \(data.count) bytes"
         } catch {
             message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        }
+    }
+
+    private func reclassifyAll() async {
+        busy = true
+        defer { busy = false }
+        do {
+            let res = try await APIClient().reclassify()
+            message = "Reclassified \(res.processed) events (\(res.updated) updated)."
+            await store.refresh()
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        }
+    }
+}
+
+private struct FilterRulesSettingsView: View {
+    @State private var blockedSenders: [String] = AppConfig.blockedSenders()
+    @State private var junkKeywords: [String] = AppConfig.junkKeywords()
+    @State private var promoKeywords: [String] = AppConfig.promoKeywords()
+    @State private var newSender = ""
+    @State private var newJunk = ""
+    @State private var newPromo = ""
+
+    var body: some View {
+        Form {
+            ruleSection(
+                title: "Blocked Senders (→ Junk)",
+                placeholder: "e.g. AD-RUMMYC-P",
+                input: $newSender,
+                items: $blockedSenders,
+                uppercase: true,
+                save: AppConfig.setBlockedSenders
+            )
+            ruleSection(
+                title: "Junk Keywords (→ Junk)",
+                placeholder: "e.g. rummy",
+                input: $newJunk,
+                items: $junkKeywords,
+                uppercase: false,
+                save: AppConfig.setJunkKeywords
+            )
+            ruleSection(
+                title: "Promo Keywords (→ Promotions)",
+                placeholder: "e.g. % off",
+                input: $newPromo,
+                items: $promoKeywords,
+                uppercase: false,
+                save: AppConfig.setPromoKeywords
+            )
+        }
+        .navigationTitle("Offline Filter Rules")
+    }
+
+    @ViewBuilder
+    private func ruleSection(
+        title: String,
+        placeholder: String,
+        input: Binding<String>,
+        items: Binding<[String]>,
+        uppercase: Bool,
+        save: @escaping ([String]) -> Void
+    ) -> some View {
+        Section(title) {
+            HStack {
+                TextField(placeholder, text: input)
+                    .textInputAutocapitalization(uppercase ? .characters : .never)
+                Button("Add") {
+                    let trimmed = input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    let val = uppercase ? trimmed.uppercased() : trimmed
+                    if !items.wrappedValue.contains(val) {
+                        items.wrappedValue.append(val)
+                        save(items.wrappedValue)
+                    }
+                    input.wrappedValue = ""
+                }
+                .disabled(input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            ForEach(items.wrappedValue, id: \.self) { item in
+                Text(item)
+            }
+            .onDelete { offsets in
+                items.wrappedValue.remove(atOffsets: offsets)
+                save(items.wrappedValue)
+            }
         }
     }
 }

@@ -46,6 +46,18 @@ struct EventDetailView: View {
                     }
                 }
             }
+
+            Section {
+                NavigationLink {
+                    ComplaintView(
+                        initialSender: event.senderRaw,
+                        initialBody: event.summary
+                    )
+                } label: {
+                    Label("Report as Spam / Fraud (1909 / 1930)", systemImage: "exclamationmark.shield")
+                        .foregroundStyle(.red)
+                }
+            }
         }
         .navigationTitle("Audit")
     }

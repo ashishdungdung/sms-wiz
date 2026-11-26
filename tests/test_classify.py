@@ -485,3 +485,37 @@ class TestUnseenMessageProbe:
         )
         assert otp.intent is Intent.OTP
         assert otp.merchant is None or otp.merchant.raw is None
+
+    def test_reward_points_credited_routes_to_rewards_not_income(self, merchants):
+        event = classify(
+            "Reward Points Credited: 1000 To HDFC Bank Credit Card 5941 On 03/NOV/2026 Towards EARNED 5% CASHBACK",
+            "HDFCBK-S",
+            merchants,
+        )
+        assert event.intent is Intent.VOUCHER_ISSUED
+        assert event.routing.apple_subaction is AppleSubAction.TRANSACTIONAL_REWARDS
+        assert event.ledger.counts_as_income is False
+
+    def test_reclassify_and_loan_summary(self, tmp_path):
+        from sms_wiz.analytics import loan_summary
+        from sms_wiz.db import connect
+        from sms_wiz.merchants import MerchantDictionary
+        from sms_wiz.models import IngestRequest
+        from sms_wiz.pipeline import Ingestor, reclassify_stored
+
+        db_file = str(tmp_path / "test.db")
+        merch = MerchantDictionary(db_file)
+        Ingestor(db_file).ingest(
+            IngestRequest(
+                sender="ICICIT-S",
+                body="EMI of Rs 21826 for ICICI Bank Personal Loan XX7052 is due on 05-Nov-26.",
+            )
+        )
+        conn = connect(db_file)
+        res = reclassify_stored(conn, merch)
+        assert res["processed"] == 1
+        rows = [dict(r) for r in conn.execute("SELECT * FROM events").fetchall()]
+        loans = loan_summary(rows)
+        assert loans["count"] == 1
+        assert loans["monthly_emi_total"] == 21826.0
+        conn.close()

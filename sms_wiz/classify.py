@@ -423,7 +423,7 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
         return Intent.PHISHING_SUSPECT, min(0.99, 0.55 + ctx.forensic.score * 0.5), evidence, ["phishing_signals"]
 
     # 2. Credit-card bill payment (the classic double-count) ---------------
-    if _any(CC_BILL_PATTERNS, lower):
+    if _any(CC_BILL_PATTERNS, lower) and not re.search(r"\breward\s+points?\b", lower):
         evidence.append("message reports a card bill payment")
         return Intent.CC_BILL_PAYMENT, 0.85, evidence, flags
 
@@ -558,7 +558,12 @@ def _decide(ctx: _Ctx) -> tuple[Intent, float, list[str], list[str]]:
         evidence.append(f"bill/statement due language ({bill.strip()})")
         return Intent.BILL_DUE, 0.78, evidence, flags
 
-    # 12. Vouchers ---------------------------------------------------------
+    # 12. Vouchers & reward points -----------------------------------------
+    if re.search(r"\breward\s+points?\b", lower) and re.search(
+        r"\b(?:credited|earned|added|redeemed|expir(?:e|ing)|lapse)\b", lower
+    ):
+        evidence.append("reward points update")
+        return Intent.VOUCHER_ISSUED, 0.82, evidence, flags
     if _any(VOUCHER_PATTERNS, lower) and not VOUCHER_REJECT.search(ctx.text):
         code = extract.find_voucher_code(ctx.text)
         if code or re.search(r"\bexpi(?:re|res|ry)\b", lower):

@@ -647,3 +647,35 @@ def bill_calendar(rows: Iterable[dict[str, Any]], today: Optional[date] = None) 
         "paid_total": round(sum(p["paid"] for p in paid.values()), 2),
         "due_total": round(sum(float(d["amount_due"] or 0.0) for d in due), 2),
     }
+
+
+def loan_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Group loan / EMI notices and debits by institution + account tail."""
+    loans: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("dedup_status") == "suppressed_duplicate":
+            continue
+        intent = row.get("intent")
+        if intent not in {"bill_due", "upcoming_debit", "expense"}:
+            continue
+        body = (row.get("body") or "").lower()
+        if not any(tok in body for tok in ("loan", "emi", "installment")):
+            continue
+        inst = row.get("institution") or row.get("sender_name") or "Loan"
+        tail = row.get("account_last4") or "----"
+        key = f"{inst}:{tail}"
+        entry = loans.setdefault(
+            key,
+            {"key": key, "institution": inst, "account_last4": tail, "emi_amount": None, "due_date": None, "count": 0},
+        )
+        entry["count"] += 1
+        amt = row.get("amount_value")
+        if amt is not None and entry["emi_amount"] is None:
+            entry["emi_amount"] = round(float(amt), 2)
+        rem = _reminder(row)
+        if rem.get("due_date") and entry["due_date"] is None:
+            entry["due_date"] = rem["due_date"]
+
+    items = sorted(loans.values(), key=lambda x: (x["due_date"] or "9999-99-99", x["institution"]))
+    monthly_emi = round(sum(float(x["emi_amount"] or 0.0) for x in items), 2)
+    return {"loans": items, "count": len(items), "monthly_emi_total": monthly_emi}

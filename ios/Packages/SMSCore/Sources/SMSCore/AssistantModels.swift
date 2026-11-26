@@ -135,6 +135,7 @@ public struct AlertItem: Decodable, Sendable, Identifiable, Equatable {
 
 public struct EventSummaryItem: Decodable, Sendable, Identifiable, Equatable {
     public let eventID: String
+    public let senderRaw: String
     public let intent: String
     public let amountValue: Double?
     public let institution: String?
@@ -156,6 +157,7 @@ public struct EventSummaryItem: Decodable, Sendable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case intent, institution, retention, confidence, payload, body
         case eventID = "event_id"
+        case senderRaw = "sender_raw"
         case amountValue = "amount_value"
         case merchantRaw = "merchant_raw"
         case merchantClean = "merchant_clean"
@@ -170,6 +172,7 @@ public struct EventSummaryItem: Decodable, Sendable, Identifiable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         eventID = try c.decode(String.self, forKey: .eventID)
+        senderRaw = (try? c.decodeIfPresent(String.self, forKey: .senderRaw)) ?? ""
         intent = try c.decode(String.self, forKey: .intent)
         amountValue = try c.decodeIfPresent(Double.self, forKey: .amountValue)
         institution = try c.decodeIfPresent(String.self, forKey: .institution)
@@ -240,6 +243,32 @@ public extension APIClient {
         )
     }
 
+    func investments() async throws -> InvestmentsBook {
+        try await fetchJSON(path: "/api/v1/analytics/investments")
+    }
+
+    func travel() async throws -> TravelLog {
+        try await fetchJSON(path: "/api/v1/analytics/travel")
+    }
+
+    func loans() async throws -> LoansSummary {
+        try await fetchJSON(path: "/api/v1/analytics/loans")
+    }
+
+    func reclassify() async throws -> ReclassifyResult {
+        var req = try request(path: "/api/v1/reclassify", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            throw APIError.offline
+        }
+        try APIClient.validate(response, data: data)
+        return try JSONDecoder().decode(ReclassifyResult.self, from: data)
+    }
+
     private func fetchJSON<T: Decodable>(path: String, query: [URLQueryItem] = []) async throws -> T {
         let req = try request(path: path, query: query)
         let data: Data
@@ -252,4 +281,83 @@ public extension APIClient {
         try APIClient.validate(response, data: data)
         return try JSONDecoder().decode(T.self, from: data)
     }
+}
+
+public struct InvestmentHolding: Decodable, Sendable, Identifiable, Equatable {
+    public let security: String
+    public let broker: String?
+    public let netQuantity: Double
+    public let buyValue: Double
+    public let lastPrice: Double?
+
+    public var id: String { security }
+
+    enum CodingKeys: String, CodingKey {
+        case security, broker
+        case netQuantity = "net_quantity"
+        case buyValue = "buy_value"
+        case lastPrice = "last_price"
+    }
+}
+
+public struct InvestmentsBook: Decodable, Sendable, Equatable {
+    public let holdings: [InvestmentHolding]
+    public let sipTotal: Double
+    public let dividendTotal: Double
+
+    enum CodingKeys: String, CodingKey {
+        case holdings
+        case sipTotal = "sip_total"
+        case dividendTotal = "dividend_total"
+    }
+}
+
+public struct TravelTrip: Decodable, Sendable, Identifiable, Equatable {
+    public let mode: String
+    public let provider: String?
+    public let pnr: String?
+    public let route: String?
+    public let fare: Double?
+
+    public var id: String { (pnr ?? "") + (route ?? mode) }
+}
+
+public struct TravelLog: Decodable, Sendable, Equatable {
+    public let trips: [TravelTrip]
+    public let count: Int
+}
+
+public struct LoanItem: Decodable, Sendable, Identifiable, Equatable {
+    public let key: String
+    public let institution: String
+    public let accountLast4: String
+    public let emiAmount: Double?
+    public let dueDate: String?
+    public let count: Int
+
+    public var id: String { key }
+
+    enum CodingKeys: String, CodingKey {
+        case key, institution, count
+        case accountLast4 = "account_last4"
+        case emiAmount = "emi_amount"
+        case dueDate = "due_date"
+    }
+}
+
+public struct LoansSummary: Decodable, Sendable, Equatable {
+    public let loans: [LoanItem]
+    public let count: Int
+    public let monthlyEmiTotal: Double
+
+    enum CodingKeys: String, CodingKey {
+        case loans, count
+        case monthlyEmiTotal = "monthly_emi_total"
+    }
+}
+
+public struct ReclassifyResult: Decodable, Sendable, Equatable {
+    public let processed: Int
+    public let updated: Int
+    public let unchanged: Int
 }
