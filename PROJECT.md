@@ -70,10 +70,10 @@ dependency, optional home-server sync.
 | Notification policy | push / digest / silent per alert kind, quiet hours, 6-hour dedupe | **Built** |
 | Filter rule DSL | `sms-wiz.filter/v1`, validated, compiled to `contracts/filter_rules.json` | **Built** (Python fast path); Swift evaluator **written, not compiled** |
 | Real-message fixtures | redacted Indian bank messages replayed through the pipeline | **Built** (see `tests/fixtures/bank_templates/`) |
-| Swift package + tests | platform-neutral models with parity tests | **Written, not compiled here** (no Swift toolchain in CI sandbox) |
-| SwiftUI app screens | ledger, review queue, vaults, complaint | **Proposed** |
-| Cloudflare edge for the filter endpoint | global uptime for network deferral | **Proposed** — not written |
-| XcodeGen project spec | generate the `.xcodeproj` without the GUI | **Proposed** — not written |
+| Swift package + tests | platform-neutral models with parity tests | **Built** — 40 `SMSCoreTests` pass (`make swift-test`) |
+| SwiftUI app screens | ledger, upcoming, vault, import, merchant review, complaint, settings | **Built** — compiled and installed on iPhone 14 |
+| Cloudflare edge for the filter endpoint | global uptime for network deferral | **Built** — `edge/` worker + 3 Node tests |
+| XcodeGen project spec | generate the `.xcodeproj` without the GUI | **Built** — `ios/project.yml` |
 
 ### Out of scope (and why)
 

@@ -94,6 +94,7 @@ over, so both paths are first-class:
 | --- | --- | --- |
 | **Paste** | Select bubbles in Messages → Copy → Import tab → "Paste from clipboard" → review the parsed list → Import | `ClipboardImportView.swift` + `PasteParser.swift` |
 | **Share** | Long-press a bubble → Share → "File with SMS Wiz" | `ShareViewController.swift` + `ShareExtension/Info.plist` |
+| **Mac Messages batch** | Grant Full Disk Access to Terminal.app and run `./.venv/bin/python scripts/import_mac_messages.py --all` (read-only `~/Library/Messages/chat.db` → `/api/v1/ingest-sms`). Verified on real SMS history: 686 found → 647 imported, 39 suppressed duplicates, 0 failed. | `scripts/import_mac_messages.py` |
 | Shortcut | Manual or automation, two text parameters | `IngestSMSIntent.swift` |
 
 Both paths end in the same client call and obey the same three rules:
@@ -170,12 +171,12 @@ records that with `shadowed_by` rather than pretending otherwise.
 
 | Piece | Status |
 | --- | --- |
-| `SMSCore` models, contracts, app config, queue, paste parser, API client | **Written, not compiled** — Swift package, no toolchain here |
-| `FilterRules.swift` evaluator | **Written, not compiled**; algorithm checked against Python by transliteration (0/38 mismatches), Swift itself not built |
-| `SenderKind.swift` (header → entity kind, offline) | **Written, not compiled**; mirror of `parse_sender` checked over 1,197 senders from the registry, 0 mismatches — `contracts/sender_kinds.json` is the data, `tests/test_contracts.py` keeps it honest |
-| Filter extension, share extension, app screens | **Written, not compiled**; needs an Xcode target |
-| Server side of every call they make | **Built and tested** (551 tests) |
-| Xcode project, signing, entitlements, App Group registration | **Proposed** — cannot be checked in as a buildable artifact without signing |
+| `SMSCore` models, contracts, app config, queue, paste parser, API client | **Built and tested** (`make swift-test`: 40 tests passed, 0 failures) |
+| `FilterRules.swift` evaluator | **Built and tested** (`FilterRulesParityTests`: 0/38 mismatches against Python) |
+| `SenderKind.swift` (header → entity kind, offline) | **Built and tested** (`SenderKindTests` + `contracts/sender_kinds.json`) |
+| Filter extension, share extension, app screens | **Built and installed** on iPhone 14 (`SMSWiz.app`, `MessageFilterExtension`, `ShareExtension`) |
+| Server side of every call they make | **Built and tested** (551 pytest tests) |
+| XcodeGen project spec, entitlements, local signing | **Built** (`ios/project.yml` → `xcodegen generate`; Personal Team `5ZE5DE96PN` tested; `messagefilter:` associated domain still requires a paid Apple Developer account) |
 
 Run `make swift-test` on a machine with Swift (macOS, or Linux with
 swift-corelibs-foundation) to turn the first three rows into "built and tested".
