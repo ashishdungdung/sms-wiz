@@ -57,7 +57,7 @@ extension MessageFilterExtension: ILMessageFilterCapabilitiesQueryHandling {
 
 extension MessageFilterExtension: ILMessageFilterQueryHandling {
 
-    private static let appGroupID = "group.com.example.smswiz"
+    private static let appGroupID = "group.com.ashishdungdung.smswiz"
 
     func handle(_ queryRequest: ILMessageFilterQueryRequest,
                 context: ILMessageFilterExtensionContext,

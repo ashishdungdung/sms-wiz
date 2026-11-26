@@ -18,7 +18,7 @@ import Foundation
 /// Server location and token, shared by every target through the App Group.
 public struct AppConfig: Sendable, Equatable {
     /// Change this in both entitlements files as well — see ios/README.md.
-    public static let appGroupID = "group.com.example.smswiz"
+    public static let appGroupID = "group.com.ashishdungdung.smswiz"
 
     public var baseURL: String
     public var token: String
