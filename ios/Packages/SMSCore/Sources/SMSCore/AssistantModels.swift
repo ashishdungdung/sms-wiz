@@ -54,10 +54,10 @@ public struct CleanupQueuesResponse: Decodable, Sendable, Equatable {
     public let queues: [CleanupQueueBucket]
 }
 
-public struct SubscriptionSeries: Decodable, Sendable, Identifiable, Equatable {
+public struct SubscriptionSeries: Decodable, Sendable, Equatable, Identifiable {
     public let key: String
     public let name: String
-    public let category: String
+    public let category: String?
     public let cadence: String
     public let confidence: Double
     public let amount: Double?
