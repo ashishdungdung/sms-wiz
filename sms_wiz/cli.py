@@ -610,6 +610,12 @@ def main(argv: list[str] | None = None) -> int:
     reclassify_cmd = sub.add_parser("reclassify", help="re-run updated rules on stored events")
     reclassify_cmd.add_argument("--db", default=None)
 
+    threats_cmd = sub.add_parser("threats", help="inspect or backfill the spam & threat database")
+    threats_cmd.add_argument("--db", default=None)
+    threats_cmd.add_argument("--backfill", action="store_true", help="populate from quarantined events")
+    threats_cmd.add_argument("--kind", default=None, help="filter by sender, domain, or pattern")
+    threats_cmd.add_argument("--category", default=None)
+
     args = parser.parse_args(argv)
 
     if args.command == "demo":
@@ -769,6 +775,26 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             connection.close()
         print(f"processed={result['processed']} updated={result['updated']} unchanged={result['unchanged']}")
+        return 0
+
+    if args.command == "threats":
+        from . import threats
+
+        connection = connect(_db_path(args.db))
+        try:
+            if args.backfill:
+                res = threats.backfill_from_events(connection)
+                print(
+                    f"scanned={res['events_scanned']} recorded={res['indicators_recorded']} total={res['total_threats']}"
+                )
+            else:
+                threats.ensure_seeds(connection)
+                rows = threats.list_threats(connection, kind=args.kind, category=args.category)
+                for r in rows:
+                    print(f"[{r['severity']:8}] {r['kind']:7} {r['indicator']:32} {r['category']:15} hits={r['hit_count']} ({r['source']})")
+                print(f"{len(rows)} threat indicator(s)")
+        finally:
+            connection.close()
         return 0
 
     parser.print_help()

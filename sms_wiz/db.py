@@ -94,6 +94,20 @@ CREATE TABLE IF NOT EXISTS alerts (
     message TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS threats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    indicator TEXT NOT NULL,
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'high',
+    source TEXT NOT NULL DEFAULT 'seed',
+    hit_count INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    UNIQUE(kind, indicator)
+);
 """
 
 

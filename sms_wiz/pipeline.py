@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from . import store
+from . import store, threats
 from . import extract
 from .classify import analyse
 from .db import connect
@@ -115,6 +115,23 @@ class Ingestor:
             self._track_refund(conn, event, alerts)
             self._track_voucher(conn, event, alerts)
             self._risk_alerts(conn, event, alerts)
+            if event.intent is Intent.PHISHING_SUSPECT:
+                threats.record_from_event(conn, event)
+            else:
+                hits = threats.match_threats(conn, request.sender, request.body)
+                if hits:
+                    first = hits[0]
+                    event.flags.append("known_threat")
+                    event.evidence.append(
+                        f"matched threat database: {first['indicator']} ({first['category']})"
+                    )
+                    alerts.append(
+                        Alert(
+                            severity="warning",
+                            kind="known_threat",
+                            message=f"Sender or link matched threat database ({first['indicator']} · {first['category']}).",
+                        )
+                    )
 
             store.save_alerts(conn, event.event_id, alerts)
         finally:

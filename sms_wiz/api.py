@@ -539,6 +539,73 @@ messages that reach the server by paste, share sheet or Shortcut. Details in <sp
         finally:
             c.close()
 
+    @app.get("/api/v1/threats")
+    def get_threats(
+        kind: Optional[str] = None,
+        category: Optional[str] = None,
+        limit: int = Query(default=200, le=500),
+    ) -> list[dict[str, Any]]:
+        from . import threats
+
+        c = conn()
+        try:
+            threats.ensure_seeds(c)
+            return threats.list_threats(c, kind=kind, category=category, limit=limit)
+        finally:
+            c.close()
+
+    @app.post("/api/v1/threats")
+    def add_threat(
+        payload: dict[str, Any] = Body(...),
+        x_sms_wiz_token: Optional[str] = Header(default=None, alias="X-SMSWiz-Token"),
+    ) -> dict[str, Any]:
+        _check_token(x_sms_wiz_token)
+        from . import threats
+
+        kind = str(payload.get("kind") or "sender").strip()
+        indicator = str(payload.get("indicator") or "").strip()
+        category = str(payload.get("category") or "phishing").strip()
+        severity = str(payload.get("severity") or "high").strip()
+        notes = payload.get("notes")
+        if not indicator:
+            raise HTTPException(status_code=400, detail="indicator is required")
+        c = conn()
+        try:
+            return threats.record_threat(
+                c, kind=kind, indicator=indicator, category=category, severity=severity, source="user", notes=notes
+            )
+        finally:
+            c.close()
+
+    @app.delete("/api/v1/threats/{threat_id}")
+    def remove_threat(
+        threat_id: int,
+        x_sms_wiz_token: Optional[str] = Header(default=None, alias="X-SMSWiz-Token"),
+    ) -> dict[str, Any]:
+        _check_token(x_sms_wiz_token)
+        from . import threats
+
+        c = conn()
+        try:
+            if not threats.delete_threat(c, threat_id):
+                raise HTTPException(status_code=404, detail="threat not found")
+            return {"status": "deleted", "id": threat_id}
+        finally:
+            c.close()
+
+    @app.post("/api/v1/threats/backfill")
+    def backfill_threats(
+        x_sms_wiz_token: Optional[str] = Header(default=None, alias="X-SMSWiz-Token"),
+    ) -> dict[str, int]:
+        _check_token(x_sms_wiz_token)
+        from . import threats
+
+        c = conn()
+        try:
+            return threats.backfill_from_events(c)
+        finally:
+            c.close()
+
     @app.get("/api/v1/subscriptions")
     def subscription_list() -> dict[str, Any]:
         rows = _rows()
